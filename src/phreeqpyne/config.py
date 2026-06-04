@@ -23,9 +23,9 @@ class ModelConfig:
 
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     simulation_kind: str = "transport"
-    n_cells: int = 30
+    n_cells: int = 10
     n_stages: int = 8
-    stage_shifts: list[int] = field(default_factory=lambda: [20, 20, 20, 20, 20, 20, 20, 20])
+    stage_shifts: list[int] = field(default_factory=lambda: [2, 3, 4, 10, 15, 16, 19, 20])
     boundary_base: dict[str, Any] = field(default_factory=lambda: {
         "temp": 240,
         "pressure": 27,
@@ -50,49 +50,77 @@ class ModelConfig:
         "units": "mol/kgw",
         "pH": 8.0,
         "pe": 0.0,
-        "Na": 1.05,
-        "Cl": 0.50,
-        "K": 1e-3,
-        "P(5)": 0.10,
-        "Cu(1)": 3.5e-4,
-        "Fe(3)": 2.0e-4,
-        "S(-2)": 1.5e-2,
-        "Au(3)": 1.0e-4,
+        "Na": 1e-1,
+        "Cl": 1e-1,
+        "K": 1e-10,
+        "P(5)": 0.0,
+        "Cu(2)": 5e-5,
+        "Fe(3)": 1e-5,
+        "S(-2)": 0.0,
+        "Au(3)": 0.0,
         "water": 0.008,
     })
+    initial_pore_gradient: dict[str, Any] = field(default_factory=lambda: {
+        "species": {
+            species: {"mode": "log", "shape_k": 5.0, "shell_factor": 1.0, "core_factor": 0.1}
+            for species in ["Na", "Cl", "K", "P(5)", "Cu(2)", "Fe(3)", "S(-2)", "Au(3)"]
+        },
+    })
     equilibrium_phases: list[tuple[Any, ...]] = field(default_factory=lambda: [
-        ("Pyrite", 0, 0),
-        ("Chalcopyrite(alpha)", 0, 0),
-        ("Bornite(alpha)", 0, 0),
-        ("Magnetite", 0, 0),
-        ("Chalcocite(alpha)", 0, 0),
-        ("Cu(element)", 0, 0),
-        ("Au(element)", 0, 0),
+        ("Pyrite", 0.8, 0, None),
+        ("Chalcopyrite(alpha)", -2.0, 0, None),
+        ("Bornite(alpha)", -1.0, 0, None),
+        ("Magnetite", 0.6, 0, None),
+        ("Chalcocite(alpha)", 1.0, 0, None),
+        ("Au(element)", 0, 0, None),
+        ("Cu(element)", 0, 0, None),
     ])
     hematite_kinetics: dict[str, Any] = field(default_factory=lambda: {
         "rate_name": "Hematite_PK",
-        "m0": 1.0e-3,
-        "m": 1.0e-3,
-        "steps": 1,
-        "affinity_factor": 1.0,
-        "sp_area": 9.8,
-        "roughness": 1.0,
-        "lgkH": -4.6,
-        "e_H": 0.0,
-        "nH": 1.0,
-        "lgkH2O": -10.3,
-        "e_H2O": 0.0,
-        "lgkOH": -13.5,
+        "formula": "Fe2O3",
+        "m": 5e-7,
+        "m0": 5e-7,
+        "affinity_factor": 0,
+        "sp_area": 1.0e3,
+        "roughness": 10,
+        "lgkH": -9.39,
+        "e_H": 66.2,
+        "nH": 1,
+        "lgkH2O": -14.6,
+        "e_H2O": 66.2,
+        "lgkOH": -30,
         "e_OH": 0.0,
-        "nOH": 1.0,
+        "nOH": 0,
+        "tol": 1e-8,
+        "step_divide": 10,
+        "runge_kutta": 3,
+        "bad_step_max": 500,
     })
     transport_params: dict[str, Any] = field(default_factory=lambda: {
-        "time_step": 1.0e5,
-        "lengths": 0.01,
-        "flow_direction": "forward",
+        "time_step": 1.0e4,
+        "flow_direction": "diffusion_only",
         "boundary_conditions": "constant closed",
+        "lengths": 1e-3,
+        "dispersivities": 1e-6,
+        "diffusion_coefficient": 1e-9,
+        "correct_disp": None,
+        "punch_cells": None,
+        "punch_frequency": 1,
     })
-    plot: dict[str, Any] = field(default_factory=lambda: {"target_cells": [5, 10, 20, 30]})
+    selected_output: dict[str, Any] = field(default_factory=lambda: {
+        "totals": ["Na", "Cl", "K", "P", "Cu", "Fe", "S", "Au", "P(5)", "Cu(1)", "Cu(2)", "Fe(2)", "Fe(3)", "S(-2)", "S(6)", "Au(1)", "Au(3)"],
+        "molalities": ["Fe+2", "Fe+3", "FeOH+", "FeOH+2", "FeCl+", "FeCl+2", "FeCl2", "FeCl2+", "Fe(OH)4-"],
+        "activities": [
+            "SO4-2", "Cu(HS)2-", "Au(HS)2-", "AuHS", "H+", "OH-", "HS-", "H2S",
+            "Au(OH)2-", "Au+", "Au+3", "AuCl", "AuCl2-", "AuCl3-2", "AuCl4-", "AuOH",
+            "Cu2S(HS)2-2", "CuCl+", "CuCl2", "CuCl2-", "CuCl3-", "CuCl3-2",
+            "CuCl4-2", "CuHS", "CuCl", "CuOH", "CuOH+", "H2S", "HS-", "S-2",
+        ],
+        "equilibrium_phases": ["Magnetite", "Chalcocite(alpha)", "Chalcopyrite(alpha)", "Bornite(alpha)", "Au(element)", "Pyrite", "Cu(element)"],
+        "saturation_indices": ["Hematite", "Magnetite", "Chalcocite(alpha)", "Pyrite", "Chalcopyrite(alpha)", "Bornite(alpha)", "Cu(element)", "Au(element)"],
+        "kinetic_reactants": ["Hematite_PK"],
+    })
+    plot: dict[str, Any] = field(default_factory=lambda: {"target_cells": [1, 4, 7, 10]})
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable dictionary."""

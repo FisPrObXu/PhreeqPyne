@@ -49,6 +49,10 @@ python -m pip install -e .[gui]
 phreeqpyne gui
 ```
 
+The GUI includes a Plot tab for loading `selected_output.csv`. Plots open in a
+separate window and can be redrawn after changing columns, grouping, line style,
+line width, color, titles, axis labels, and aspect ratio.
+
 Run the simulation when the configured IPhreeqc DLL/SO and database are available:
 
 ```bash

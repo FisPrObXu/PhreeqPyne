@@ -9,8 +9,18 @@ def test_build_phreeqc_script_contains_core_blocks():
 
     assert "CALCULATE_VALUES" in script
     assert "RATES\nHematite_PK" in script
-    assert "KINETICS 1-30" in script
+    assert "SOLUTION 1  Initial Alkaline Pore Fluid (shell->core gradient)" in script
+    assert "SOLUTION 10  Initial Alkaline Pore Fluid (shell->core gradient)" in script
+    assert "COPY solution" not in script
+    assert "KINETICS 1-10" in script
+    assert "-diffusion_coefficient 1e-09" in script
+    assert "-punch_frequency       1" in script
+    assert "-totals" in script
+    assert "-kinetic_reactants" in script
     assert script.count("TRANSPORT") == 8
+    assert script.count("\nEND") == 8
+    assert script.count("SAVE solution 0") == 8
+    assert script.count("Initial Alkaline Pore Fluid (shell->core gradient)") == 10
     assert "# --- Stage 08 ---" in script
     assert script.endswith("END")
 

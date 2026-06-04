@@ -5,12 +5,14 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from phreeqpyne.interpolation import transform_progress
+
 
 def _format_solution_component(name: str, value: Any) -> str:
     return f"    {name:<12} {value}"
 
 
-def build_solution_block(number: int, cfg: Mapping[str, Any], title: str | None = None) -> str:
+def build_solution_block(number: int | str, cfg: Mapping[str, Any], title: str | None = None) -> str:
     """Build a PHREEQC SOLUTION block from a solution dictionary."""
 
     lines = [f"SOLUTION {number}" if title is None else f"SOLUTION {number} {title}"]
@@ -43,7 +45,11 @@ SR_m_Hematite
 
 
 def build_rates_block(kin_cfg: Mapping[str, Any]) -> str:
-    """Build the notebook's kinetic hematite dissolution RATES block."""
+    """Build the configured PHREEQC RATES block."""
+
+    custom_rates = str(kin_cfg.get("rates_block", "")).strip()
+    if custom_rates:
+        return custom_rates
 
     return f"""
 RATES
@@ -85,7 +91,7 @@ def build_equilibrium_phases_block(n_cells: int, phases: Sequence[Sequence[Any]]
 
 
 def build_kinetics_block(n_cells: int, kin_cfg: Mapping[str, Any]) -> str:
-    """Build the KINETICS block for the hematite kinetic reactant."""
+    """Build a KINETICS block for the configured kinetic reactant."""
 
     parms = [
         kin_cfg["affinity_factor"],
@@ -105,11 +111,14 @@ def build_kinetics_block(n_cells: int, kin_cfg: Mapping[str, Any]) -> str:
     return f"""
 KINETICS 1-{n_cells}
 {kin_cfg['rate_name']}
-    -formula Hematite 1
-    -m0 {kin_cfg['m0']}
-    -m  {kin_cfg['m']}
-    -parms {parms_text}
-    -steps {kin_cfg['steps']}
+    -formula  {kin_cfg.get('formula', 'Fe2O3')}  1
+    -m      {kin_cfg['m']}
+    -m0     {kin_cfg['m0']}
+    -parms  {parms_text}
+    -tol    {kin_cfg.get('tol', 1e-8)}
+    -step_divide {kin_cfg.get('step_divide', 10)}
+    -runge_kutta {kin_cfg.get('runge_kutta', 3)}
+    -bad_step_max {kin_cfg.get('bad_step_max', 500)}
 """.strip()
 
 
@@ -118,37 +127,132 @@ def build_initial_cells_block(
     pore_cfg: Mapping[str, Any],
     phases: Sequence[Sequence[Any]],
     kin_cfg: Mapping[str, Any],
+    gradient_cfg: Mapping[str, Any] | None = None,
 ) -> str:
     """Build initial solution, equilibrium phases, and kinetics for all cells."""
 
-    return "\n\n".join(
-        [
-            build_solution_block(1, pore_cfg, "Initial pore fluid"),
-            f"COPY solution 1 {n_cells}",
-            build_equilibrium_phases_block(n_cells, phases),
-            build_kinetics_block(n_cells, kin_cfg),
-        ]
-    )
+    gradient_cfg = gradient_cfg or {}
+    species_cfg = gradient_cfg.get("species", {})
+    if isinstance(species_cfg, Mapping):
+        gradient_species = set(species_cfg)
+    else:
+        gradient_species = set(species_cfg)
+        species_cfg = {
+            species: {
+                "mode": gradient_cfg.get("mode", "linear"),
+                "shape_k": gradient_cfg.get("shape_k", 3.0),
+                "shell_factor": gradient_cfg.get("shell_factor", 1.0),
+                "core_factor": gradient_cfg.get("core_factor", gradient_cfg.get("shell_factor", 1.0)),
+            }
+            for species in gradient_species
+        }
+
+    def scaled_value(name: str, base_value: Any, progress: float) -> Any:
+        if name not in gradient_species:
+            return base_value
+        spec = species_cfg.get(name, {})
+        shell_factor = float(spec.get("shell_factor", 1.0))
+        core_factor = float(spec.get("core_factor", shell_factor))
+        gradient_mode = str(spec.get("mode", "linear"))
+        gradient_shape_k = float(spec.get("shape_k", 3.0))
+        mapped = transform_progress(progress=progress, mode=gradient_mode, shape_k=gradient_shape_k)
+        return float(base_value) * (shell_factor + (core_factor - shell_factor) * mapped)
+
+    lines: list[str] = []
+    for cell in range(1, n_cells + 1):
+        progress = 0.0 if n_cells == 1 else (cell - 1) / (n_cells - 1)
+        lines.extend(
+            [
+                f"SOLUTION {cell}  Initial Alkaline Pore Fluid (shell->core gradient)",
+                f"    temp      {pore_cfg['temp']}",
+                f"    pressure  {pore_cfg['pressure']}",
+                f"    units     {pore_cfg['units']}",
+                f"    pH        {pore_cfg['pH']}",
+                f"    pe        {pore_cfg['pe']}",
+                "    redox     pe",
+                f"    Na        {scaled_value('Na', pore_cfg['Na'], progress)}",
+                f"    Cl        {scaled_value('Cl', pore_cfg['Cl'], progress)} charge",
+                f"    P(5)      {scaled_value('P(5)', pore_cfg['P(5)'], progress)}",
+                f"    Cu(2)     {scaled_value('Cu(2)', pore_cfg['Cu(2)'], progress)}",
+                f"    Fe(3)     {scaled_value('Fe(3)', pore_cfg['Fe(3)'], progress)}",
+                f"    S(-2)     {scaled_value('S(-2)', pore_cfg['S(-2)'], progress)}",
+                f"    Au(3)     {scaled_value('Au(3)', pore_cfg['Au(3)'], progress)}",
+            ]
+        )
+        if "K" in pore_cfg:
+            lines.append(f"    K         {scaled_value('K', pore_cfg['K'], progress)}")
+        lines.extend([f"    -water    {pore_cfg['water']}", ""])
+
+    lines.extend([build_equilibrium_phases_block(n_cells, phases), "", build_kinetics_block(n_cells, kin_cfg)])
+    return "\n".join(lines).strip()
 
 
-def make_selected_output_block(stage_index: int, user_number: int = 1) -> str:
-    """Build a compact SELECTED_OUTPUT block with stage identification."""
+def build_boundary_solution0_block(cfg: Mapping[str, Any], fallback_cfg: Mapping[str, Any]) -> str:
+    """Build and save the external boundary solution used by staged TRANSPORT."""
+
+    stage_label = cfg.get("stage_label", f"Stage-{cfg.get('stage_index', '')}".strip("-"))
+    lines = [
+        f"SOLUTION 0  External boundary fluid at outer shell rim ({stage_label})",
+        f"    temp      {cfg['temp']}",
+        f"    pressure  {cfg['pressure']}",
+        f"    pH        {cfg.get('pH', fallback_cfg['pH'])}",
+        f"    pe        {cfg.get('pe', fallback_cfg['pe'])}",
+        "    redox     pe",
+        f"    units     {cfg['units']}",
+        f"    Na        {cfg['Na']}",
+        f"    Cl        {cfg['Cl']} charge",
+        f"    P(5)      {cfg['P(5)']}",
+        f"    Cu(1)     {cfg.get('Cu(1)', cfg.get('cu_value'))}",
+        f"    Fe(3)     {cfg.get('Fe(3)', cfg.get('fe_value'))}",
+        f"    S(-2)     {cfg.get('S(-2)', cfg.get('s_value'))}",
+        f"    Au(3)     {cfg.get('Au(3)', cfg.get('au_value'))}",
+    ]
+    if "K" in cfg:
+        lines.append(f"    K         {cfg['K']}")
+    lines.extend([f"    -water    {cfg['water']}", "SAVE solution 0"])
+    return "\n".join(lines).strip()
+
+
+def _selected_output_line(keyword: str, values: Sequence[str]) -> str:
+    return f"    {keyword:<22} {'  '.join(values)}" if values else ""
+
+
+def make_selected_output_block(
+    stage_index: int,
+    selected_output: Mapping[str, Sequence[str]] | None = None,
+    rate_name: str = "Hematite_PK",
+    user_number: int = 1,
+) -> str:
+    """Build the notebook's extended SELECTED_OUTPUT block with stage identification."""
+
+    selected_output = selected_output or {}
+    optional_lines = [
+        _selected_output_line("-totals", selected_output.get("totals", [])),
+        _selected_output_line("-molalities", selected_output.get("molalities", [])),
+        _selected_output_line("-activities", selected_output.get("activities", [])),
+        _selected_output_line("-equilibrium_phases", selected_output.get("equilibrium_phases", [])),
+        _selected_output_line("-saturation_indices", selected_output.get("saturation_indices", [])),
+        _selected_output_line("-kinetic_reactants", selected_output.get("kinetic_reactants", [rate_name])),
+    ]
+    optional_text = "\n".join(line for line in optional_lines if line)
 
     return f"""
+TITLE Shell-to-core diffusion replacement: Sequential Stage {stage_index}
 SELECTED_OUTPUT {user_number}
     -reset false
-    -simulation true
-    -state true
-    -solution true
-    -distance true
-    -time true
     -step true
+    -soln true
+    -dist true
+    -time true
+    -temperature true
     -pH true
     -pe true
-    -temperature true
+    -charge_balance true
+    -percent_error true
+{optional_text}
 USER_PUNCH {user_number}
-    -headings stage
+    -headings stage u_step time_days pH_user logaHS- logaH2S SR_Hematite HematitePK_m
     -start
-    10 PUNCH {stage_index}
+10 PUNCH {stage_index}, STEP_NO, TOTAL_TIME/3600/24, -LA("H+"), LA("HS-"), LA("H2S"), SR("Hematite"), KIN("{rate_name}")
     -end
 """.strip()

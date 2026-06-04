@@ -13,7 +13,9 @@ def test_cli_init_config_and_build_script(tmp_path):
 
     assert main(["build-script", "--config", str(config_path), "--output", str(script_path)]) == 0
     script = script_path.read_text(encoding="utf-8")
-    assert "SOLUTION 0 Stage 1 boundary fluid" in script
+    assert "SOLUTION 0  External boundary fluid at outer shell rim (Stage-1)" in script
+    assert "-flow_direction        diffusion_only" in script
+    assert "-totals" in script
     assert "TRANSPORT" in script
 
 
