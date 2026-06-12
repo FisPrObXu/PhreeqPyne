@@ -1,0 +1,291 @@
+{
+  "runtime": {
+    "dll_path": "D:\\USGS\\IPhreeqcCOM 3.8.6-17100\\bin\\IPhreeqcCOM.dll",
+    "database_path": "D:\\USGS\\IPhreeqcCOM 3.8.6-17100\\database\\PHREEQC_ThermoddemV1.10_15Dec2020.dat",
+    "output_dir": ".",
+    "print_full_header": false
+  },
+  "simulation_kind": "titration",
+  "n_cells": 10,
+  "n_stages": 8,
+  "stage_shifts": [
+    2,
+    3,
+    4,
+    10,
+    15,
+    16,
+    19,
+    20
+  ],
+  "boundary_base": {
+    "pH": 8.0,
+    "temp": 240.0,
+    "water": 0.008,
+    "pressure": 27.0,
+    "units": "mol/kgw",
+    "pe": 0.0,
+    "Na": 1.05,
+    "Cl": 0.5,
+    "K": 0.001,
+    "P(5)": 0.1,
+    "Cu(1)": 0.0001,
+    "S(-2)": 0.01,
+    "Fe(3)": 0.0001
+  },
+  "boundary_interpolation": {},
+  "initial_pore_solution": {},
+  "initial_pore_gradient": {
+    "species": {}
+  },
+  "equilibrium_phases": [
+    [
+      "Pyrite",
+      0.8,
+      0,
+      null
+    ],
+    [
+      "Chalcopyrite(alpha)",
+      -2.0,
+      0,
+      null
+    ],
+    [
+      "Bornite(alpha)",
+      -1.0,
+      0,
+      null
+    ],
+    [
+      "Magnetite",
+      0.6,
+      0,
+      null
+    ],
+    [
+      "Chalcocite(alpha)",
+      1.0,
+      0,
+      null
+    ],
+    [
+      "Au(element)",
+      0,
+      0,
+      null
+    ],
+    [
+      "Cu(element)",
+      0,
+      0,
+      null
+    ]
+  ],
+  "hematite_kinetics": {
+    "rate_name": "Hematite_PK",
+    "formula": "Fe2O3",
+    "m": 5e-07,
+    "m0": 5e-07,
+    "affinity_factor": 0.0,
+    "sp_area": 1000.0,
+    "roughness": 10.0,
+    "lgkH": -9.39,
+    "e_H": 66.2,
+    "nH": 1.0,
+    "lgkH2O": -14.6,
+    "e_H2O": 66.2,
+    "lgkOH": -30.0,
+    "e_OH": 0.0,
+    "nOH": 0.0,
+    "tol": 1e-08,
+    "step_divide": 10,
+    "runge_kutta": 3,
+    "bad_step_max": 500
+  },
+  "transport_params": {
+    "time_step": 10000.0,
+    "flow_direction": "diffusion_only",
+    "boundary_conditions": "constant closed",
+    "lengths": 0.001,
+    "dispersivities": 1e-06,
+    "diffusion_coefficient": 1e-09,
+    "correct_disp": null,
+    "punch_cells": null,
+    "punch_frequency": 1
+  },
+  "titration_params": {
+    "solution_source": "reaction_solution",
+    "reaction_components": [
+      [
+        "Hematite",
+        5e-07
+      ]
+    ],
+    "reaction_total_moles": 1.0,
+    "reaction_steps": 1000,
+    "incremental_reactions": true
+  },
+  "selected_output": {
+    "totals": [
+      "Na",
+      "Cl",
+      "K",
+      "P",
+      "Cu",
+      "Fe",
+      "S",
+      "Au",
+      "P(5)",
+      "Cu(1)",
+      "Cu(2)",
+      "Fe(2)",
+      "Fe(3)",
+      "S(-2)",
+      "S(6)",
+      "Au(1)",
+      "Au(3)"
+    ],
+    "molalities": [
+      "Fe+2",
+      "Fe+3",
+      "FeOH+",
+      "FeOH+2",
+      "FeCl+",
+      "FeCl+2",
+      "FeCl2",
+      "FeCl2+",
+      "Fe(OH)4-"
+    ],
+    "activities": [
+      "SO4-2",
+      "Cu(HS)2-",
+      "Au(HS)2-",
+      "AuHS",
+      "H+",
+      "OH-",
+      "HS-",
+      "H2S",
+      "Au(OH)2-",
+      "Au+",
+      "Au+3",
+      "AuCl",
+      "AuCl2-",
+      "AuCl3-2",
+      "AuCl4-",
+      "AuOH",
+      "Cu2S(HS)2-2",
+      "CuCl+",
+      "CuCl2",
+      "CuCl2-",
+      "CuCl3-",
+      "CuCl3-2",
+      "CuCl4-2",
+      "CuHS",
+      "CuCl",
+      "CuOH",
+      "CuOH+",
+      "H2S",
+      "HS-",
+      "S-2"
+    ],
+    "equilibrium_phases": [
+      "Magnetite",
+      "Chalcocite(alpha)",
+      "Chalcopyrite(alpha)",
+      "Bornite(alpha)",
+      "Au(element)",
+      "Pyrite",
+      "Cu(element)"
+    ],
+    "saturation_indices": [
+      "Hematite",
+      "Magnetite",
+      "Chalcocite(alpha)",
+      "Pyrite",
+      "Chalcopyrite(alpha)",
+      "Bornite(alpha)",
+      "Cu(element)",
+      "Au(element)"
+    ],
+    "kinetic_reactants": [
+      "Hematite_PK"
+    ]
+  },
+  "plot": {
+    "target_cells": [
+      1,
+      4,
+      7,
+      10
+    ],
+    "csv_path": "E:\\Github\\FisPrObXu\\PhreeqPyne\\selected_output.csv",
+    "stage": "all",
+    "x_column": "rxn_step",
+    "title": "PhreeqPyne titration selected output",
+    "x_label": "",
+    "left_y_label": "",
+    "right_y_label": "",
+    "aspect_ratio": "auto",
+    "stack_alpha": "0.75",
+    "legend_location": "outside upper right",
+    "font_family": "Times New Roman",
+    "title_font_size": "14",
+    "label_font_size": "11",
+    "tick_font_size": "10",
+    "legend_font_size": "10",
+    "axis_line_width": "1.0",
+    "tick_width": "1.0",
+    "grid_enabled": "on",
+    "grid_axis": "both",
+    "grid_style": "-",
+    "grid_color": "#b0b0b0",
+    "grid_width": "0.8",
+    "grid_alpha": "0.25",
+    "figure_width": "8",
+    "figure_height": "5",
+    "layers": [
+      {
+        "type": "line",
+        "y": "pH",
+        "label": "",
+        "line_color": "#1f77b4",
+        "fill_color": "#1f77b4",
+        "line_style": "-",
+        "line_width": "1.5",
+        "y_axis": "2"
+      },
+      {
+        "type": "line",
+        "y": "Magnetite_pct",
+        "label": "",
+        "line_color": "#d62728",
+        "fill_color": "#d62728",
+        "line_style": "-",
+        "line_width": "1.5",
+        "y_axis": "2"
+      },
+      {
+        "type": "line",
+        "y": "Chalcopyrite(alpha)_pct",
+        "label": "",
+        "line_color": "#9467bd",
+        "fill_color": "#9467bd",
+        "line_style": "-",
+        "line_width": "1.5",
+        "y_axis": "2"
+      },
+      {
+        "type": "line",
+        "y": "Bornite(alpha)_pct",
+        "label": "",
+        "line_color": "#2ca02c",
+        "fill_color": "#2ca02c",
+        "line_style": "-",
+        "line_width": "1.5",
+        "y_axis": "2"
+      }
+    ],
+    "y_axis_count": 2
+  }
+}

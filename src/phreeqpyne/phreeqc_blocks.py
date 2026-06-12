@@ -24,7 +24,10 @@ def build_solution_block(number: int | str, cfg: Mapping[str, Any], title: str |
             emitted.add(key)
     for key, value in cfg.items():
         if key not in emitted:
-            lines.append(_format_solution_component(key, value))
+            if key == "water":
+                lines.append(f"    -water      {value}")
+            else:
+                lines.append(_format_solution_component(key, value))
     return "\n".join(lines)
 
 

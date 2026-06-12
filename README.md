@@ -9,7 +9,7 @@ Building a handful simulation paradigm for hydrothermal water-rock simulation us
 - typed, serializable model/runtime configuration;
 - staged boundary-fluid interpolation;
 - PHREEQC input-script generation through an extensible simulation workflow registry;
-- the current `transport` workflow plus a path for future ADVECTION, equilibrium-batch, inverse-modeling, or coupled workflows;
+- the current `transport` workflow and a `titration` batch-reaction workflow;
 - an optional Qt scenario editor for window-based parameter entry;
 - a runtime wrapper that imports PhreeqPy only when a simulation is executed;
 - a CLI for writing default configs, rendering `.phr` input files, and running IPhreeqc.
@@ -49,9 +49,18 @@ python -m pip install -e .[gui]
 phreeqpyne gui
 ```
 
-The GUI includes a Plot tab for loading `selected_output.csv`. Plots open in a
-separate window and can be redrawn after changing columns, grouping, line style,
-line width, color, titles, axis labels, and aspect ratio.
+The GUI opens a main workspace that behaves like a tabbed internal-window
+browser. Use the `Tools` dropdown to open or activate `transport` and
+`titration` editors; close unneeded tools from their internal tab close button.
+Editors can also be tiled or cascaded inside the workspace. Each editor owns
+only the tabs for its simulation family. Titration uses one homogeneous reaction
+solution and reaction-step output, so it does not expose transport stages,
+all-stage plotting, shell-to-core gradients, or kinetic-rate controls. The Plot tab can load
+`selected_output.csv`; plots open in a separate window and can be redrawn after
+changing columns, grouping, line style, line width, color, titles, axis labels,
+and aspect ratio. The main workspace also includes a one-click run for the
+currently open transport and titration editor configurations, writing them to
+separate output folders.
 
 Run the simulation when the configured IPhreeqc DLL/SO and database are available:
 

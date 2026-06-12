@@ -10,6 +10,8 @@ import json
 import sys
 import traceback
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from copy import deepcopy
 from pathlib import Path
 
 import pandas as pd
@@ -30,6 +32,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMdiArea,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -86,15 +89,17 @@ class PlotWindow(QMainWindow):
 
 
 class ScenarioEditor(QMainWindow):
-    """Small Qt window for editing common model parameters."""
+    """Workflow-specific Qt window for editing one model family."""
 
     LINE_COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#17becf", "#8c564b", "#7f7f7f"]
     STACK_FILL_COLORS = ["#9ecae1", "#fdae6b", "#a1d99b", "#c7b9d6", "#fdd0a2", "#9edae5", "#c49c94", "#c7c7c7"]
     STACK_LINE_COLORS = ["#1f77b4", "#e6550d", "#31a354", "#756bb1", "#fd8d3c", "#17becf", "#8c564b", "#636363"]
 
-    def __init__(self) -> None:
+    def __init__(self, simulation_kind: str) -> None:
         super().__init__()
         self.config = default_model_config()
+        self.simulation_kind_value = simulation_kind
+        self.config.simulation_kind = simulation_kind
         self.stage_shift_fields: list[QSpinBox] = []
         self.boundary_base_fields: dict[str, QLineEdit] = {}
         self.boundary_rows: list[dict[str, object]] = []
@@ -104,12 +109,13 @@ class ScenarioEditor(QMainWindow):
         self.initial_solution_fields: dict[str, QLineEdit] = {}
         self.kinetics_fields: dict[str, QLineEdit] = {}
         self.transport_fields: dict[str, QLineEdit] = {}
+        self.titration_fields: dict[str, QLineEdit] = {}
         self.rates_block_baseline = ""
         self.rates_block_loaded_custom = False
         self.plot_data: pd.DataFrame | None = None
         self.plot_window: PlotWindow | None = None
         self.plot_layers: list[dict[str, object]] = []
-        self.setWindowTitle("PhreeqPyne Scenario Editor")
+        self.setWindowTitle(f"PhreeqPyne {self.simulation_kind_value.title()} Editor")
         self.setMinimumSize(360, 280)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._build_form()
@@ -120,8 +126,9 @@ class ScenarioEditor(QMainWindow):
         root.setMinimumSize(0, 0)
         root.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(root)
-        workflow_names = ", ".join(f"{item.kind} ({item.display_name})" for item in list_simulations())
-        layout.addWidget(QLabel(f"Available workflows: {workflow_names}"))
+        self.simulation_workflows = list_simulations()
+        self.simulation_kind = QComboBox()
+        self.simulation_kind.addItem(self.simulation_kind_value)
 
         self.dll_path = QLineEdit()
         self.database_path = QLineEdit()
@@ -136,14 +143,18 @@ class ScenarioEditor(QMainWindow):
         self.stage_shift_grid = QWidget()
         self.stage_shift_layout = QGridLayout(self.stage_shift_grid)
         self.stage_shift_layout.setContentsMargins(0, 0, 0, 0)
-        tabs = QTabWidget(root)
-        tabs.addTab(self._scroll_tab(self._build_runtime_group()), "Runtime")
-        tabs.addTab(self._scroll_tab(self._build_transport_group()), "Transport")
-        tabs.addTab(self._scroll_tab(self._build_species_group()), "Boundary")
-        tabs.addTab(self._scroll_tab(self._build_initial_solution_group()), "Initial")
-        tabs.addTab(self._scroll_tab(self._build_kinetics_group()), "Kinetics")
-        tabs.addTab(self._scroll_tab(self._build_plot_tab()), "Plot")
-        layout.addWidget(tabs)
+        self.tabs = QTabWidget(root)
+        self.tabs.addTab(self._scroll_tab(self._build_runtime_group()), "Runtime")
+        if self.simulation_kind_value == "transport":
+            self.tabs.addTab(self._scroll_tab(self._build_transport_group()), "Transport")
+        if self.simulation_kind_value == "titration":
+            self.tabs.addTab(self._scroll_tab(self._build_titration_group()), "Titration")
+        self.tabs.addTab(self._scroll_tab(self._build_species_group()), self._solution_tab_title())
+        if self.simulation_kind_value == "transport":
+            self.tabs.addTab(self._scroll_tab(self._build_initial_solution_group()), "Initial")
+            self.tabs.addTab(self._scroll_tab(self._build_kinetics_group()), "Kinetics")
+        self.tabs.addTab(self._scroll_tab(self._build_plot_tab()), "Plot")
+        layout.addWidget(self.tabs)
 
         browse_row = QHBoxLayout()
         config_load = QPushButton("Load config")
@@ -170,6 +181,7 @@ class ScenarioEditor(QMainWindow):
         self.setCentralWidget(root)
 
     def _clear_startup_fields(self) -> None:
+        self._select_combo_text(self.simulation_kind, [self.simulation_kind_value])
         for field in [self.dll_path, self.database_path, self.output_dir]:
             field.clear()
         self.n_cells.setValue(0)
@@ -177,8 +189,16 @@ class ScenarioEditor(QMainWindow):
         self._sync_stage_shift_fields()
         for field in self.transport_fields.values():
             field.clear()
-        self.boundary_left_condition.setCurrentIndex(-1)
-        self.boundary_right_condition.setCurrentIndex(-1)
+        for field in self.titration_fields.values():
+            field.clear()
+        if hasattr(self, "titration_solution_source"):
+            self.titration_solution_source.setCurrentIndex(-1)
+        if hasattr(self, "titration_incremental"):
+            self.titration_incremental.setCurrentIndex(-1)
+        if hasattr(self, "boundary_left_condition"):
+            self.boundary_left_condition.setCurrentIndex(-1)
+        if hasattr(self, "boundary_right_condition"):
+            self.boundary_right_condition.setCurrentIndex(-1)
         for field in self.boundary_base_fields.values():
             field.clear()
         self.clear_boundary_rows()
@@ -188,7 +208,8 @@ class ScenarioEditor(QMainWindow):
         self.clear_gradient_rows()
         for field in self.kinetics_fields.values():
             field.clear()
-        self.rates_block.clear()
+        if hasattr(self, "rates_block"):
+            self.rates_block.clear()
         self.rates_block_baseline = ""
         self.rates_block_loaded_custom = False
         self.plot_data = None
@@ -231,6 +252,7 @@ class ScenarioEditor(QMainWindow):
     def _build_runtime_group(self) -> QGroupBox:
         group = QGroupBox("Runtime paths")
         form = QFormLayout(group)
+        form.addRow("Simulation workflow", QLabel(self.simulation_kind_value))
         form.addRow("IPhreeqc DLL/SO", self._path_row(self.dll_path, "file", "Select IPhreeqc DLL/SO"))
         form.addRow("Database", self._path_row(self.database_path, "file", "Select PHREEQC database"))
         form.addRow("Output directory", self._path_row(self.output_dir, "directory", "Select output directory"))
@@ -274,6 +296,29 @@ class ScenarioEditor(QMainWindow):
         condition_layout.addWidget(self.boundary_right_condition)
         form.addRow("boundary_conditions", condition_row)
         return group
+
+    def _build_titration_group(self) -> QGroupBox:
+        group = QGroupBox("Reaction-step titration controls")
+        form = QFormLayout(group)
+        self.titration_solution_source = QComboBox()
+        self.titration_solution_source.setEditable(True)
+        self.titration_solution_source.addItems(["reaction_solution"])
+        self.titration_solution_source.setToolTip("Use the homogeneous reaction solution from the Reaction solution tab.")
+        form.addRow("solution_source", self.titration_solution_source)
+        for key in ["reaction_components", "reaction_total_moles", "reaction_steps"]:
+            field = QLineEdit()
+            self.titration_fields[key] = field
+            form.addRow(key, field)
+        self.titration_incremental = QComboBox()
+        self.titration_incremental.addItems(["true", "false"])
+        form.addRow("incremental_reactions", self.titration_incremental)
+        hint = QLabel("reaction_components accepts entries like Hematite, 5e-7; separate multiple reactants with semicolons. PHREEQC equilibrates after each reaction step.")
+        hint.setWordWrap(True)
+        form.addRow("Format", hint)
+        return group
+
+    def _solution_tab_title(self) -> str:
+        return "Reaction solution" if self.simulation_kind_value == "titration" else "Boundary"
 
     def _sync_stage_shift_fields(self) -> None:
         target_count = self.n_stages.value()
@@ -351,9 +396,9 @@ class ScenarioEditor(QMainWindow):
         row["shape_k"].setToolTip("Linear uses the original uncurved progress; shape_k is only used by exp/log modes.")
 
     def _build_species_group(self) -> QGroupBox:
-        group = QGroupBox("Boundary fluid")
+        group = QGroupBox("Reaction solution" if self.simulation_kind_value == "titration" else "Boundary fluid")
         layout = QVBoxLayout(group)
-        base_group = QGroupBox("Fluid parameters")
+        base_group = QGroupBox("Homogeneous solution" if self.simulation_kind_value == "titration" else "Fluid parameters")
         base_layout = QFormLayout(base_group)
         for key in ["temp", "pressure", "units", "pH", "pe", "water"]:
             field = QLineEdit()
@@ -370,11 +415,14 @@ class ScenarioEditor(QMainWindow):
         row_buttons.addWidget(refresh_elements)
         layout.addLayout(row_buttons)
 
-        self.boundary_rows_box = QGroupBox("Components")
+        self.boundary_rows_box = QGroupBox("Solution components")
         self.boundary_rows_layout = QVBoxLayout(self.boundary_rows_box)
         layout.addWidget(self.boundary_rows_box)
 
-        hint = QLabel("Rows with start/end values are stage-interpolated. Rows without start/end are written as constant boundary fluid components.")
+        if self.simulation_kind_value == "titration":
+            hint = QLabel("Each component is a fixed concentration in one homogeneous reaction solution. No stage interpolation or cell gradient is used.")
+        else:
+            hint = QLabel("Rows with start/end values are stage-interpolated. Rows without start/end are written as constant boundary fluid components.")
         hint.setWordWrap(True)
         layout.addWidget(hint)
         return group
@@ -454,11 +502,12 @@ class ScenarioEditor(QMainWindow):
         mode.currentTextChanged.connect(lambda: self._refresh_boundary_row(row))
         shape_k.textChanged.connect(lambda: self._refresh_boundary_row(row))
         row_layout.addRow("Element", element_combo)
-        row_layout.addRow("Constant value", base_value)
-        row_layout.addRow("Stage start", start)
-        row_layout.addRow("Stage end", end)
-        row_layout.addRow("Mode", mode)
-        row_layout.addRow("Shape k", shape_k)
+        row_layout.addRow("Concentration", base_value)
+        if self.simulation_kind_value == "transport":
+            row_layout.addRow("Stage start", start)
+            row_layout.addRow("Stage end", end)
+            row_layout.addRow("Mode", mode)
+            row_layout.addRow("Shape k", shape_k)
         row_layout.addRow("", remove)
         self.boundary_rows.append(row)
         self.boundary_rows_layout.addWidget(row_group)
@@ -477,11 +526,20 @@ class ScenarioEditor(QMainWindow):
         figure.clear()
         axis = figure.add_subplot(111)
         try:
-            stages = max(1, self.n_stages.value())
-            xs = list(range(1, stages + 1))
             start_text = row["start"].text().strip()
             end_text = row["end"].text().strip()
             base_text = row["base"].text().strip()
+            if self.simulation_kind_value == "titration":
+                value = float(base_text) if base_text else 0.0
+                axis.bar([element], [value], color="#0f766e", alpha=0.75)
+                axis.set_ylabel("concentration", fontsize=7)
+                axis.tick_params(labelsize=7)
+                axis.grid(True, axis="y", alpha=0.25)
+                figure.tight_layout(pad=0.4)
+                row["preview_canvas"].draw_idle()
+                return
+            stages = max(1, self.n_stages.value())
+            xs = list(range(1, stages + 1))
             if start_text or end_text:
                 start = float(start_text)
                 end = float(end_text)
@@ -737,7 +795,8 @@ class ScenarioEditor(QMainWindow):
         self.plot_y_axis_count.setRange(1, 12)
         self.plot_y_axis_count.setValue(2)
         self.plot_y_axis_count.valueChanged.connect(self._sync_plot_y_axis_options)
-        form.addRow("Stage", self.plot_stage)
+        if self.simulation_kind_value == "transport":
+            form.addRow("Stage", self.plot_stage)
         form.addRow("X column", self.plot_x_column)
         form.addRow("Title", self.plot_title)
         form.addRow("X label", self.plot_x_label)
@@ -816,8 +875,6 @@ class ScenarioEditor(QMainWindow):
         current_button.clicked.connect(self.load_current_output_plot)
         draw_button = QPushButton("Draw / Refresh")
         draw_button.clicked.connect(self.draw_plot)
-        draw_all_stages = QPushButton("Draw all stages")
-        draw_all_stages.clicked.connect(self.draw_all_stages_plot)
         open_button = QPushButton("Open plot window")
         open_button.clicked.connect(self.open_plot_window)
         save_button = QPushButton("Save figure")
@@ -825,12 +882,18 @@ class ScenarioEditor(QMainWindow):
         button_row.addWidget(load_button)
         button_row.addWidget(current_button)
         button_row.addWidget(draw_button)
-        button_row.addWidget(draw_all_stages)
+        if self.simulation_kind_value == "transport":
+            draw_all_stages = QPushButton("Draw all stages")
+            draw_all_stages.clicked.connect(self.draw_all_stages_plot)
+            button_row.addWidget(draw_all_stages)
         button_row.addWidget(open_button)
         button_row.addWidget(save_button)
         layout.addLayout(button_row)
 
-        hint = QLabel("Choose one X column, set the total Y axes, then assign each line layer to axis 1, 2, 3, or higher. Stack layers use axis 1.")
+        if self.simulation_kind_value == "titration":
+            hint = QLabel("Choose a reaction-step X column, then assign each output series to one of the Y axes. Stack layers use axis 1.")
+        else:
+            hint = QLabel("Choose one X column, set the total Y axes, then assign each line layer to axis 1, 2, 3, or higher. Stack layers use axis 1.")
         hint.setWordWrap(True)
         layout.addWidget(hint)
         return tab
@@ -979,6 +1042,8 @@ class ScenarioEditor(QMainWindow):
         return count
 
     def _load_config_to_fields(self) -> None:
+        self.config.simulation_kind = self.simulation_kind_value
+        self._select_combo_text(self.simulation_kind, [self.simulation_kind_value])
         self.dll_path.setText(self.config.runtime.dll_path)
         self.database_path.setText(self.config.runtime.database_path)
         self.output_dir.setText(self.config.runtime.output_dir)
@@ -990,12 +1055,25 @@ class ScenarioEditor(QMainWindow):
         for key, field in self.transport_fields.items():
             value = self.config.transport_params.get(key)
             field.setText("" if value is None else str(value))
-        boundary_condition = str(self.config.transport_params.get("boundary_conditions", "constant closed"))
-        condition_parts = boundary_condition.split()
-        first_condition = condition_parts[0] if condition_parts else "constant"
-        last_condition = condition_parts[1] if len(condition_parts) > 1 else "closed"
-        self._select_combo_text(self.boundary_left_condition, [first_condition])
-        self._select_combo_text(self.boundary_right_condition, [last_condition])
+        if self.titration_fields:
+            titration_params = self.config.titration_params
+            self._set_combo_text_or_add(self.titration_solution_source, str(titration_params.get("solution_source", "boundary")))
+            self.titration_fields["reaction_components"].setText(
+                self._format_reaction_components(titration_params.get("reaction_components", []))
+            )
+            self.titration_fields["reaction_total_moles"].setText(str(titration_params.get("reaction_total_moles", 1.0)))
+            self.titration_fields["reaction_steps"].setText(str(titration_params.get("reaction_steps", 1000)))
+            self._set_combo_text_or_add(
+                self.titration_incremental,
+                "true" if bool(titration_params.get("incremental_reactions", True)) else "false",
+            )
+        if hasattr(self, "boundary_left_condition") and hasattr(self, "boundary_right_condition"):
+            boundary_condition = str(self.config.transport_params.get("boundary_conditions", "constant closed"))
+            condition_parts = boundary_condition.split()
+            first_condition = condition_parts[0] if condition_parts else "constant"
+            last_condition = condition_parts[1] if len(condition_parts) > 1 else "closed"
+            self._select_combo_text(self.boundary_left_condition, [first_condition])
+            self._select_combo_text(self.boundary_right_condition, [last_condition])
         for key, field in self.boundary_base_fields.items():
             field.setText(str(self.config.boundary_base.get(key, "")))
         self.database_elements = self._load_database_elements(self.config.runtime.database_path)
@@ -1004,21 +1082,25 @@ class ScenarioEditor(QMainWindow):
         for key, value in self.config.boundary_base.items():
             if key not in reserved_boundary_keys:
                 self.add_boundary_row(key, base=value)
-        for key, spec in self.config.boundary_interpolation.items():
-            self.add_boundary_row(key, spec=spec)
+        if self.simulation_kind_value == "transport":
+            for key, spec in self.config.boundary_interpolation.items():
+                self.add_boundary_row(key, spec=spec)
         for key, field in self.initial_solution_fields.items():
             field.setText(str(self.config.initial_pore_solution.get(key, "")))
-        self.clear_gradient_rows()
-        self._load_gradient_rows(self.config.initial_pore_gradient)
+        if hasattr(self, "gradient_rows_layout"):
+            self.clear_gradient_rows()
+            self._load_gradient_rows(self.config.initial_pore_gradient)
         for key, field in self.kinetics_fields.items():
             field.setText(str(self.config.hematite_kinetics.get(key, "")))
-        self.rates_block_loaded_custom = bool(str(self.config.hematite_kinetics.get("rates_block", "")).strip())
-        self.rates_block_baseline = build_rates_block(self.config.hematite_kinetics)
-        self.rates_block.setPlainText(self.rates_block_baseline)
+        if hasattr(self, "rates_block"):
+            self.rates_block_loaded_custom = bool(str(self.config.hematite_kinetics.get("rates_block", "")).strip())
+            self.rates_block_baseline = build_rates_block(self.config.hematite_kinetics)
+            self.rates_block.setPlainText(self.rates_block_baseline)
         self._load_plot_config_to_fields(self.config.plot)
 
     def _fields_to_config(self) -> ModelConfig:
         config = self.config
+        config.simulation_kind = self.simulation_kind_value
         config.runtime.dll_path = self.dll_path.text().strip()
         config.runtime.database_path = self.database_path.text().strip()
         config.runtime.output_dir = self.output_dir.text().strip() or "."
@@ -1038,9 +1120,20 @@ class ScenarioEditor(QMainWindow):
                 config.transport_params[key] = int(text)
             else:
                 config.transport_params[key] = None if text == "" else float(text)
-        config.transport_params["boundary_conditions"] = (
-            f"{self.boundary_left_condition.currentText()} {self.boundary_right_condition.currentText()}"
-        )
+        if hasattr(self, "boundary_left_condition") and hasattr(self, "boundary_right_condition"):
+            config.transport_params["boundary_conditions"] = (
+                f"{self.boundary_left_condition.currentText()} {self.boundary_right_condition.currentText()}"
+            )
+        if self.titration_fields:
+            config.titration_params = {
+                "solution_source": self.titration_solution_source.currentText().strip() or "boundary",
+                "reaction_components": self._parse_reaction_components(
+                    self.titration_fields["reaction_components"].text()
+                ),
+                "reaction_total_moles": float(self.titration_fields["reaction_total_moles"].text() or 1.0),
+                "reaction_steps": int(self.titration_fields["reaction_steps"].text() or 1000),
+                "incremental_reactions": self.titration_incremental.currentText().lower() != "false",
+            }
         reserved_boundary_keys = {"temp", "pressure", "units", "pH", "pe", "water"}
         config.boundary_base = {key: config.boundary_base[key] for key in reserved_boundary_keys if key in config.boundary_base}
         config.boundary_interpolation = {}
@@ -1050,7 +1143,7 @@ class ScenarioEditor(QMainWindow):
                 continue
             start_text = row["start"].text().strip()
             end_text = row["end"].text().strip()
-            if start_text or end_text:
+            if self.simulation_kind_value == "transport" and (start_text or end_text):
                 mode = row["mode"].currentText()
                 config.boundary_interpolation[element] = {
                     "start": float(start_text),
@@ -1074,13 +1167,42 @@ class ScenarioEditor(QMainWindow):
                 config.hematite_kinetics[key] = int(text)
             else:
                 config.hematite_kinetics[key] = float(text)
-        rates_text = self.rates_block.toPlainText().strip()
-        if rates_text and (self.rates_block_loaded_custom or rates_text != self.rates_block_baseline.strip()):
-            config.hematite_kinetics["rates_block"] = rates_text
-        else:
-            config.hematite_kinetics.pop("rates_block", None)
+        if hasattr(self, "rates_block"):
+            rates_text = self.rates_block.toPlainText().strip()
+            if rates_text and (self.rates_block_loaded_custom or rates_text != self.rates_block_baseline.strip()):
+                config.hematite_kinetics["rates_block"] = rates_text
+            else:
+                config.hematite_kinetics.pop("rates_block", None)
         config.plot = self._fields_to_plot_config(config.plot)
         return config
+
+    @staticmethod
+    def _format_reaction_components(components: object) -> str:
+        if not isinstance(components, list):
+            return ""
+        lines = []
+        for component in components:
+            if isinstance(component, (list, tuple)) and len(component) == 2:
+                lines.append(f"{component[0]}, {component[1]}")
+        return "; ".join(lines)
+
+    @staticmethod
+    def _parse_reaction_components(text: str) -> list[tuple[str, float]]:
+        components: list[tuple[str, float]] = []
+        for raw_part in re.split(r"[;\n]+", text):
+            part = raw_part.strip()
+            if not part:
+                continue
+            if "," in part:
+                name, amount = part.split(",", 1)
+            else:
+                pieces = part.split()
+                if len(pieces) < 2:
+                    raise ValueError(f"Invalid reaction component: {part}")
+                name = " ".join(pieces[:-1])
+                amount = pieces[-1]
+            components.append((name.strip(), float(amount.strip())))
+        return components or [("Hematite", 5e-7)]
 
     def _fields_to_plot_config(self, existing_plot_config: dict[str, object] | None = None) -> dict[str, object]:
         plot_config = dict(existing_plot_config or {})
@@ -1252,7 +1374,8 @@ class ScenarioEditor(QMainWindow):
 
     def _load_plot_csv(self, csv_path: Path) -> None:
         self.plot_data = pd.read_csv(csv_path)
-        self._add_cell_plot_column()
+        if self.simulation_kind.currentText() == "transport":
+            self._add_cell_plot_column()
         self.plot_data = add_phase_percent_columns(self.plot_data)
         self.plot_csv_path.setText(str(csv_path))
         columns = [str(column) for column in self.plot_data.columns]
@@ -1268,7 +1391,10 @@ class ScenarioEditor(QMainWindow):
             self.plot_stage.addItem("all")
         self.plot_x_column.clear()
         self.plot_x_column.addItems(columns)
-        self._select_combo_text(self.plot_x_column, ["cell", "soln", "solution", "dist_x", "dist", "time_days", "time", "step"])
+        if self.simulation_kind.currentText() == "titration":
+            self._select_combo_text(self.plot_x_column, ["rxn_step", "step", "time_days", "time"])
+        else:
+            self._select_combo_text(self.plot_x_column, ["cell", "soln", "solution", "dist_x", "dist", "time_days", "time", "step"])
         for layer in self.plot_layers:
             self._refresh_layer_y_options(layer)
         if not self.plot_layers:
@@ -1340,11 +1466,17 @@ class ScenarioEditor(QMainWindow):
             self.plot_window.show()
             self.plot_window.raise_()
             removed_count = len(self.plot_data) - len(plot_frame)
-            self.status.setText(f"Plot refreshed for stage {stage_value}; filtered {removed_count} rows")
+            if self.simulation_kind_value == "transport":
+                self.status.setText(f"Plot refreshed for stage {stage_value}; filtered {removed_count} rows")
+            else:
+                self.status.setText(f"Titration plot refreshed; filtered {removed_count} rows")
         except Exception as exc:
             self._show_error("Draw plot failed", exc)
 
     def draw_all_stages_plot(self) -> None:
+        if self.simulation_kind_value != "transport":
+            self.status.setText("All-stage plotting is only available for transport simulations.")
+            return
         try:
             if self.plot_data is None:
                 raise ValueError("No CSV data loaded.")
@@ -1413,7 +1545,9 @@ class ScenarioEditor(QMainWindow):
         show_x_label: bool = True,
     ) -> tuple[list[object], list[str]]:
         if plot_frame.empty:
-            raise ValueError(f"No plottable rows for stage {stage_value}.")
+            if self.simulation_kind_value == "transport":
+                raise ValueError(f"No plottable rows for stage {stage_value}.")
+            raise ValueError("No plottable titration rows.")
         stack_layers = [layer for layer in layers if layer["type"] == "stack"]
         line_layers = [layer for layer in layers if layer["type"] == "line"]
         axis_map = {1: ax_left}
@@ -1481,7 +1615,8 @@ class ScenarioEditor(QMainWindow):
         if show_title:
             ax_left.set_title(title, fontsize=float(style["title_size"]), fontfamily=str(style["font_family"]))
         else:
-            ax_left.set_title(f"stage {stage_value}", fontsize=float(style["label_size"]), fontfamily=str(style["font_family"]))
+            subtitle = f"stage {stage_value}" if self.simulation_kind_value == "transport" else "reaction steps"
+            ax_left.set_title(subtitle, fontsize=float(style["label_size"]), fontfamily=str(style["font_family"]))
         ax_left.set_xlabel(
             (self.plot_x_label.text() or x_column) if show_x_label else "",
             fontsize=float(style["label_size"]),
@@ -1747,7 +1882,12 @@ class ScenarioEditor(QMainWindow):
             filename, _ = QFileDialog.getOpenFileName(self, "Load scenario config", "", "JSON (*.json)")
             if not filename:
                 return
-            self.config = ModelConfig.from_dict(json.loads(Path(filename).read_text(encoding="utf-8")))
+            loaded_config = ModelConfig.from_dict(json.loads(Path(filename).read_text(encoding="utf-8")))
+            if loaded_config.simulation_kind != self.simulation_kind_value:
+                raise ValueError(
+                    f"This is a {self.simulation_kind_value} window; open {loaded_config.simulation_kind} configs in their own window."
+                )
+            self.config = loaded_config
             self._load_config_to_fields()
             self.status.setText(f"Loaded {filename}; edit fields, then save/render/run.")
         except Exception as exc:
@@ -1777,18 +1917,57 @@ class ScenarioEditor(QMainWindow):
 
     def run_model(self) -> None:
         try:
-            result = run_simulation(self._fields_to_config())
-            output_dir = self.config.output_path
-            output_dir.mkdir(parents=True, exist_ok=True)
-            csv_path = output_dir / "selected_output.csv"
-            script_path = output_dir / "phreeqpyne_input.phr"
-            script_path.write_text(result.script, encoding="utf-8")
-            result.selected_output.to_csv(csv_path, index=False)
+            config = deepcopy(self._fields_to_config())
+            script_path, csv_path = self._run_config_to_output(config, config.output_path)
             self._load_plot_csv(csv_path)
             QMessageBox.information(self, "Simulation complete", f"Wrote:\n{script_path}\n{csv_path}")
             self.status.setText("Simulation complete")
         except Exception as exc:
             self._show_error("Run simulation failed", exc)
+
+    def run_transport_and_titration(self) -> None:
+        try:
+            base_config = deepcopy(self._fields_to_config())
+            base_output_dir = base_config.output_path
+            configs: list[tuple[str, ModelConfig, Path]] = []
+            for kind in ["transport", "titration"]:
+                config = deepcopy(base_config)
+                config.simulation_kind = kind
+                config.runtime.output_dir = str(base_output_dir / kind)
+                configs.append((kind, config, Path(config.runtime.output_dir)))
+
+            outputs: dict[str, tuple[Path, Path]] = {}
+            self.status.setText("Running transport and titration...")
+            QApplication.processEvents()
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = {
+                    executor.submit(self._run_config_to_output, config, output_dir): kind
+                    for kind, config, output_dir in configs
+                }
+                for future in as_completed(futures):
+                    kind = futures[future]
+                    outputs[kind] = future.result()
+
+            titration_csv = outputs["titration"][1]
+            self._load_plot_csv(titration_csv)
+            details = "\n".join(
+                f"{kind}:\n{script_path}\n{csv_path}"
+                for kind, (script_path, csv_path) in outputs.items()
+            )
+            QMessageBox.information(self, "Parallel simulations complete", f"Wrote:\n{details}")
+            self.status.setText("Transport and titration complete")
+        except Exception as exc:
+            self._show_error("Parallel simulations failed", exc)
+
+    @staticmethod
+    def _run_config_to_output(config: ModelConfig, output_dir: Path) -> tuple[Path, Path]:
+        result = run_simulation(config)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = output_dir / "selected_output.csv"
+        script_path = output_dir / "phreeqpyne_input.phr"
+        script_path.write_text(result.script, encoding="utf-8")
+        result.selected_output.to_csv(csv_path, index=False)
+        return script_path, csv_path
 
     def _show_error(self, title: str, exc: Exception) -> None:
         details = traceback.format_exc()
@@ -1796,8 +1975,140 @@ class ScenarioEditor(QMainWindow):
         self.status.setText(title)
 
 
+class MainControlWindow(QMainWindow):
+    """Main GUI workspace that owns internal simulation editor windows."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.transport_window: ScenarioEditor | None = None
+        self.titration_window: ScenarioEditor | None = None
+        self.editor_subwindows: dict[str, object] = {}
+        self.setWindowTitle("PhreeqPyne Workspace")
+        self.setMinimumSize(900, 620)
+        self._build_form()
+
+    def _build_form(self) -> None:
+        root = QWidget(self)
+        layout = QVBoxLayout(root)
+        layout.addWidget(QLabel("Open simulation tools as internal workspace windows; close tools when they are not needed."))
+
+        toolbar_row = QHBoxLayout()
+        self.tools_combo = QComboBox()
+        self.tools_combo.addItems(["", "Transport", "Titration"])
+        self.tools_combo.activated.connect(self.open_selected_tool)
+        run_both = QPushButton("Run Open Transport + Titration")
+        run_both.clicked.connect(self.run_open_editors)
+        tile_windows = QPushButton("Tile")
+        tile_windows.clicked.connect(lambda: self.mdi_area.tileSubWindows())
+        cascade_windows = QPushButton("Cascade")
+        cascade_windows.clicked.connect(lambda: self.mdi_area.cascadeSubWindows())
+        toolbar_row.addWidget(QLabel("Tools"))
+        toolbar_row.addWidget(self.tools_combo)
+        toolbar_row.addWidget(run_both)
+        toolbar_row.addWidget(tile_windows)
+        toolbar_row.addWidget(cascade_windows)
+        toolbar_row.addStretch(1)
+        layout.addLayout(toolbar_row)
+
+        self.mdi_area = QMdiArea(root)
+        self.mdi_area.setTabsClosable(True)
+        self.mdi_area.setTabsMovable(True)
+        self.mdi_area.setViewMode(QMdiArea.ViewMode.TabbedView)
+        layout.addWidget(self.mdi_area, 1)
+
+        self.status = QLabel("Ready")
+        layout.addWidget(self.status)
+        self.setCentralWidget(root)
+
+    def open_selected_tool(self, index: int) -> None:
+        tool_name = self.tools_combo.itemText(index).lower()
+        if tool_name in {"transport", "titration"}:
+            self.open_editor(tool_name)
+        self.tools_combo.setCurrentIndex(0)
+
+    def open_editor(self, simulation_kind: str) -> ScenarioEditor:
+        current = self._editor_for_kind(simulation_kind)
+        if current is None:
+            current = ScenarioEditor(simulation_kind)
+            current.setWindowFlags(Qt.WindowType.Widget)
+            subwindow = self.mdi_area.addSubWindow(current, Qt.WindowType.FramelessWindowHint)
+            subwindow.setWindowTitle(current.windowTitle())
+            subwindow.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+            subwindow.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            subwindow.destroyed.connect(lambda _=None, kind=simulation_kind: self._clear_editor_reference(kind))
+            self.editor_subwindows[simulation_kind] = subwindow
+            self._set_editor_for_kind(simulation_kind, current)
+            subwindow.show()
+        subwindow = self.editor_subwindows.get(simulation_kind)
+        if subwindow is not None:
+            self.mdi_area.setActiveSubWindow(subwindow)
+            subwindow.show()
+            subwindow.raise_()
+        self.status.setText(f"{simulation_kind.title()} window open")
+        return current
+
+    def close_editor(self, simulation_kind: str) -> None:
+        subwindow = self.editor_subwindows.get(simulation_kind)
+        if subwindow is not None:
+            subwindow.close()
+        self._clear_editor_reference(simulation_kind)
+        self.status.setText(f"{simulation_kind.title()} window closed")
+
+    def run_open_editors(self) -> None:
+        try:
+            transport = self.open_editor("transport")
+            titration = self.open_editor("titration")
+            configs = [
+                ("transport", deepcopy(transport._fields_to_config())),
+                ("titration", deepcopy(titration._fields_to_config())),
+            ]
+            base_output_dir = configs[0][1].output_path
+            self.status.setText("Running open transport and titration windows...")
+            QApplication.processEvents()
+            outputs: dict[str, tuple[Path, Path]] = {}
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = {}
+                for kind, config in configs:
+                    config.runtime.output_dir = str(base_output_dir / kind)
+                    futures[executor.submit(ScenarioEditor._run_config_to_output, config, Path(config.runtime.output_dir))] = kind
+                for future in as_completed(futures):
+                    outputs[futures[future]] = future.result()
+            details = "\n".join(
+                f"{kind}:\n{script_path}\n{csv_path}"
+                for kind, (script_path, csv_path) in sorted(outputs.items())
+            )
+            QMessageBox.information(self, "Parallel simulations complete", f"Wrote:\n{details}")
+            self.status.setText("Parallel simulations complete")
+        except Exception as exc:
+            details = traceback.format_exc()
+            QMessageBox.critical(self, "Parallel simulations failed", f"{exc}\n\nDetails:\n{details}")
+            self.status.setText("Parallel simulations failed")
+
+    def _editor_for_kind(self, simulation_kind: str) -> ScenarioEditor | None:
+        if simulation_kind == "transport":
+            return self.transport_window
+        if simulation_kind == "titration":
+            return self.titration_window
+        raise ValueError(f"Unknown editor kind: {simulation_kind}")
+
+    def _set_editor_for_kind(self, simulation_kind: str, editor: ScenarioEditor) -> None:
+        if simulation_kind == "transport":
+            self.transport_window = editor
+        elif simulation_kind == "titration":
+            self.titration_window = editor
+        else:
+            raise ValueError(f"Unknown editor kind: {simulation_kind}")
+
+    def _clear_editor_reference(self, simulation_kind: str) -> None:
+        if simulation_kind == "transport":
+            self.transport_window = None
+        elif simulation_kind == "titration":
+            self.titration_window = None
+        self.editor_subwindows.pop(simulation_kind, None)
+
+
 def main(argv: list[str] | None = None) -> int:
     app = QApplication(sys.argv if argv is None else argv)
-    window = ScenarioEditor()
+    window = MainControlWindow()
     window.show()
     return int(app.exec())

@@ -107,6 +107,13 @@ class ModelConfig:
         "punch_cells": None,
         "punch_frequency": 1,
     })
+    titration_params: dict[str, Any] = field(default_factory=lambda: {
+        "solution_source": "reaction_solution",
+        "reaction_components": [("Hematite", 5e-7)],
+        "reaction_total_moles": 1.0,
+        "reaction_steps": 1000,
+        "incremental_reactions": True,
+    })
     selected_output: dict[str, Any] = field(default_factory=lambda: {
         "totals": ["Na", "Cl", "K", "P", "Cu", "Fe", "S", "Au", "P(5)", "Cu(1)", "Cu(2)", "Fe(2)", "Fe(3)", "S(-2)", "S(6)", "Au(1)", "Au(3)"],
         "molalities": ["Fe+2", "Fe+3", "FeOH+", "FeOH+2", "FeCl+", "FeCl+2", "FeCl2", "FeCl2+", "Fe(OH)4-"],

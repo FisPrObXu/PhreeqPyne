@@ -31,3 +31,24 @@ def test_build_stage_blocks_validates_stage_shift_count():
 
     with pytest.raises(ValueError, match="stage_shifts"):
         build_stage_blocks(config)
+
+
+def test_build_titration_script_contains_batch_reaction_blocks():
+    config = default_model_config()
+    config.simulation_kind = "titration"
+
+    script = build_phreeqc_script(config)
+
+    assert "TITLE Batch mineral titration" in script
+    assert "SOLUTION 1 Titration starting fluid" in script
+    assert "REACTION_TEMPERATURE 1" in script
+    assert "REACTION_PRESSURE 1" in script
+    assert "REACTION 1" in script
+    assert "Hematite               5e-07" in script
+    assert "1.0 moles in 1000 steps" in script
+    assert "INCREMENTAL_REACTIONS true" in script
+    assert "SELECTED_OUTPUT 1" in script
+    assert "RATES" not in script
+    assert "KIN(\"Hematite_PK\")" not in script
+    assert "-kinetic_reactants" not in script
+    assert "TRANSPORT" not in script

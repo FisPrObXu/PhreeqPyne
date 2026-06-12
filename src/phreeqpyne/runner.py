@@ -38,9 +38,17 @@ def run_simulation(config: ModelConfig) -> SimulationResult:
 
     header = [str(column).strip() for column in output[0]]
     selected_output = pd.DataFrame(output[1:], columns=header)
-    selected_output = add_cell_columns(selected_output)
-    selected_output = add_phase_percent_columns(selected_output, config)
+    selected_output = prepare_selected_output(selected_output, config)
     return SimulationResult(script=script, selected_output=selected_output)
+
+
+def prepare_selected_output(selected_output: object, config: ModelConfig) -> object:
+    """Apply workflow-aware selected-output post-processing."""
+
+    if config.simulation_kind == "transport":
+        selected_output = add_cell_columns(selected_output)
+    selected_output = add_phase_percent_columns(selected_output, config)
+    return selected_output
 
 
 def add_cell_columns(selected_output: object) -> object:
