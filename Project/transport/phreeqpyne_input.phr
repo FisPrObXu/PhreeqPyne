@@ -1,0 +1,682 @@
+# --- Stage 01 ---
+
+TITLE Shell-to-core diffusion replacement: Sequential Stage 1
+SELECTED_OUTPUT 1
+    -reset false
+    -step true
+    -soln true
+    -dist true
+    -time true
+    -temperature true
+    -pH true
+    -pe true
+    -charge_balance true
+    -percent_error true
+    -totals                Na  Cl  K  P  Cu  Fe  S  Au  P(5)  Cu(1)  Cu(2)  Fe(2)  Fe(3)  S(-2)  S(6)  Au(1)  Au(3)
+    -molalities            Fe+2  Fe+3  FeOH+  FeOH+2  FeCl+  FeCl+2  FeCl2  FeCl2+  Fe(OH)4-
+    -activities            SO4-2  Cu(HS)2-  Au(HS)2-  AuHS  H+  OH-  HS-  H2S  Au(OH)2-  Au+  Au+3  AuCl  AuCl2-  AuCl3-2  AuCl4-  AuOH  Cu2S(HS)2-2  CuCl+  CuCl2  CuCl2-  CuCl3-  CuCl3-2  CuCl4-2  CuHS  CuCl  CuOH  CuOH+  H2S  HS-  S-2
+    -equilibrium_phases    Magnetite  Chalcocite(alpha)  Chalcopyrite(alpha)  Bornite(alpha)  Au(element)  Pyrite  Cu(element)
+    -saturation_indices    Hematite  Magnetite  Chalcocite(alpha)  Pyrite  Chalcopyrite(alpha)  Bornite(alpha)  Cu(element)  Au(element)
+    -kinetic_reactants     Hematite_PK
+USER_PUNCH 1
+    -headings stage u_step time_days pH_user logaHS- logaH2S SR_Hematite HematitePK_m
+    -start
+10 PUNCH 1, STEP_NO, TOTAL_TIME/3600/24, -LA("H+"), LA("HS-"), LA("H2S"), SR("Hematite"), KIN("Hematite_PK")
+    -end
+
+SOLUTION 0  External boundary fluid at outer shell rim (Stage-1)
+    temp      240.0
+    pressure  27.0
+    pH        8.0
+    pe        0.0
+    redox     pe
+    units     mol/kgw
+    Na        1.05
+    Cl        0.5 charge
+    P(5)      0.1
+    Cu(1)     0.00065
+    Fe(3)     0.0003
+    S(-2)     0.024
+    Au(3)     0.0001
+    K         0.001
+    -water    0.008
+SAVE solution 0
+
+CALCULATE_VALUES
+SR_m_Hematite
+-start
+10 m = MOL("H+")
+20 IF (m <= 0) THEN m = 1e-30
+30 SR = SI("Hematite")
+40 m_Hematite = 10^((2*LA("Fe+3") + 3*LA("H2O") - 6*LA("H+")) - LK_PHASE("Hematite"))
+50 SAVE m_Hematite
+-end
+
+RATES
+Hematite_PK
+-start
+10 if (M <= 0) then goto 200
+20 si_h = SI("Hematite")
+30 if (si_h >= 0) then goto 200
+40 aH = ACT("H+")
+50 if (aH <= 1e-30) then aH = 1e-30
+60 area = PARM(2) * PARM(3) * (M/M0)^PARM(4)
+70 kH = 10^(PARM(5) - PARM(6)/TK) * (aH^PARM(7))
+80 kH2O = 10^(PARM(8) - PARM(9)/TK)
+90 kOH = 10^(PARM(10) - PARM(11)/TK) * (aH^(-PARM(12)))
+100 rate = area * (kH + kH2O + kOH) * (1 - 10^(si_h))
+110 if (rate < 0) then rate = 0
+120 moles = rate * TIME
+130 if (moles > M) then moles = M
+200 SAVE moles
+-end
+
+SOLUTION 1  Initial Alkaline Pore Fluid (shell->core gradient)
+    temp      240.0
+    pressure  27.0
+    units     mol/kgw
+    pH        8.0
+    pe        0.0
+    redox     pe
+    Na        0.1
+    Cl        0.1 charge
+    P(5)      0.0
+    Cu(2)     5e-05
+    Fe(3)     1e-05
+    S(-2)     0.0
+    Au(3)     0.0
+    K         1e-10
+    -water    0.008
+
+SOLUTION 2  Initial Alkaline Pore Fluid (shell->core gradient)
+    temp      240.0
+    pressure  27.0
+    units     mol/kgw
+    pH        8.0
+    pe        0.0
+    redox     pe
+    Na        0.0778067601215215
+    Cl        0.0778067601215215 charge
+    P(5)      0.0
+    Cu(2)     3.890338006076075e-05
+    Fe(3)     7.78067601215215e-06
+    S(-2)     0.0
+    Au(3)     0.0
+    K         7.780676012152151e-11
+    -water    0.008
+
+SOLUTION 3  Initial Alkaline Pore Fluid (shell->core gradient)
+    temp      240.0
+    pressure  27.0
+    units     mol/kgw
+    pH        8.0
+    pe        0.0
+    redox     pe
+    Na        0.062467453182377786
+    Cl        0.062467453182377786 charge
+    P(5)      0.0
+    Cu(2)     3.123372659118889e-05
+    Fe(3)     6.246745318237779e-06
+    S(-2)     0.0
+    Au(3)     0.0
+    K         6.246745318237779e-11
+    -water    0.008
+
+SOLUTION 4  Initial Alkaline Pore Fluid (shell->core gradient)
+    temp      240.0
+    pressure  27.0
+    units     mol/kgw
+    pH        8.0
+    pe        0.0
+    redox     pe
+    Na        0.05073298939556503
+    Cl        0.05073298939556503 charge
+    P(5)      0.0
+    Cu(2)     2.536649469778252e-05
+    Fe(3)     5.073298939556504e-06
+    S(-2)     0.0
+    Au(3)     0.0
+    K         5.0732989395565035e-11
+    -water    0.008
+
+SOLUTION 5  Initial Alkaline Pore Fluid (shell->core gradient)
+    temp      240.0
+    pressure  27.0
+    units     mol/kgw
+    pH        8.0
+    pe        0.0
+    redox     pe
+    Na        0.04122737200663873
+    Cl        0.04122737200663873 charge
+    P(5)      0.0
+    Cu(2)     2.0613686003319367e-05
+    Fe(3)     4.122737200663874e-06
+    S(-2)     0.0
+    Au(3)     0.0
+    K         4.122737200663873e-11
+    -water    0.008
+
+SOLUTION 6  Initial Alkaline Pore Fluid (shell->core gradient)
+    temp      240.0
+    pressure  27.0
+    units     mol/kgw
+    pH        8.0
+    pe        0.0
+    redox     pe
+    Na        0.03323755933226254
+    Cl        0.03323755933226254 charge
+    P(5)      0.0
+    Cu(2)     1.6618779666131267e-05
+    Fe(3)     3.3237559332262535e-06
+    S(-2)     0.0
+    Au(3)     0.0
+    K         3.3237559332262535e-11
+    -water    0.008
+
+SOLUTION 7  Initial Alkaline Pore Fluid (shell->core gradient)
+    temp      240.0
+    pressure  27.0
+    units     mol/kgw
+    pH        8.0
+    pe        0.0
+    redox     pe
+    Na        0.026345952982034307
+    Cl        0.026345952982034307 charge
+    P(5)      0.0
+    Cu(2)     1.3172976491017153e-05
+    Fe(3)     2.6345952982034305e-06
+    S(-2)     0.0
+    Au(3)     0.0
+    K         2.6345952982034304e-11
+    -water    0.008
+
+SOLUTION 8  Initial Alkaline Pore Fluid (shell->core gradient)
+    temp      240.0
+    pressure  27.0
+    units     mol/kgw
+    pH        8.0
+    pe        0.0
+    redox     pe
+    Na        0.020286814416045497
+    Cl        0.020286814416045497 charge
+    P(5)      0.0
+    Cu(2)     1.0143407208022748e-05
+    Fe(3)     2.0286814416045495e-06
+    S(-2)     0.0
+    Au(3)     0.0
+    K         2.0286814416045496e-11
+    -water    0.008
+
+SOLUTION 9  Initial Alkaline Pore Fluid (shell->core gradient)
+    temp      240.0
+    pressure  27.0
+    units     mol/kgw
+    pH        8.0
+    pe        0.0
+    redox     pe
+    Na        0.01488053084747797
+    Cl        0.01488053084747797 charge
+    P(5)      0.0
+    Cu(2)     7.440265423738985e-06
+    Fe(3)     1.488053084747797e-06
+    S(-2)     0.0
+    Au(3)     0.0
+    K         1.488053084747797e-11
+    -water    0.008
+
+SOLUTION 10  Initial Alkaline Pore Fluid (shell->core gradient)
+    temp      240.0
+    pressure  27.0
+    units     mol/kgw
+    pH        8.0
+    pe        0.0
+    redox     pe
+    Na        0.009999999999999998
+    Cl        0.009999999999999998 charge
+    P(5)      0.0
+    Cu(2)     4.999999999999999e-06
+    Fe(3)     1e-06
+    S(-2)     0.0
+    Au(3)     0.0
+    K         9.999999999999998e-12
+    -water    0.008
+
+EQUILIBRIUM_PHASES 1-10
+    Pyrite                   0.8 0.0
+    Chalcopyrite(alpha)      -2.0 0.0
+    Bornite(alpha)           -1.0 0.0
+    Magnetite                0.6 0.0
+    Chalcocite(alpha)        1.0 0.0
+    Au(element)              0.0 0.0
+    Cu(element)              0.0 0.0
+
+KINETICS 1-10
+Hematite_PK
+    -formula  Fe2O3  1
+    -m      5e-07
+    -m0     5e-07
+    -parms  0.0 1000.0 10.0 0.67 -9.39 66.2 1.0 -14.6 66.2 -30.0 0.0 0.0
+    -tol    1e-08
+    -step_divide 10
+    -runge_kutta 3
+    -bad_step_max 500
+
+TRANSPORT
+    -cells                 10
+    -shifts                2
+    -time_step             10000.0
+    -flow_direction        diffusion_only
+    -boundary_conditions   constant closed
+    -lengths               0.001
+    -dispersivities        1e-06
+    -diffusion_coefficient 1e-09
+    -punch_cells           1-10
+    -punch_frequency       1
+
+END
+
+# --- Stage 02 ---
+
+TITLE Shell-to-core diffusion replacement: Sequential Stage 2
+SELECTED_OUTPUT 1
+    -reset false
+    -step true
+    -soln true
+    -dist true
+    -time true
+    -temperature true
+    -pH true
+    -pe true
+    -charge_balance true
+    -percent_error true
+    -totals                Na  Cl  K  P  Cu  Fe  S  Au  P(5)  Cu(1)  Cu(2)  Fe(2)  Fe(3)  S(-2)  S(6)  Au(1)  Au(3)
+    -molalities            Fe+2  Fe+3  FeOH+  FeOH+2  FeCl+  FeCl+2  FeCl2  FeCl2+  Fe(OH)4-
+    -activities            SO4-2  Cu(HS)2-  Au(HS)2-  AuHS  H+  OH-  HS-  H2S  Au(OH)2-  Au+  Au+3  AuCl  AuCl2-  AuCl3-2  AuCl4-  AuOH  Cu2S(HS)2-2  CuCl+  CuCl2  CuCl2-  CuCl3-  CuCl3-2  CuCl4-2  CuHS  CuCl  CuOH  CuOH+  H2S  HS-  S-2
+    -equilibrium_phases    Magnetite  Chalcocite(alpha)  Chalcopyrite(alpha)  Bornite(alpha)  Au(element)  Pyrite  Cu(element)
+    -saturation_indices    Hematite  Magnetite  Chalcocite(alpha)  Pyrite  Chalcopyrite(alpha)  Bornite(alpha)  Cu(element)  Au(element)
+    -kinetic_reactants     Hematite_PK
+USER_PUNCH 1
+    -headings stage u_step time_days pH_user logaHS- logaH2S SR_Hematite HematitePK_m
+    -start
+10 PUNCH 2, STEP_NO, TOTAL_TIME/3600/24, -LA("H+"), LA("HS-"), LA("H2S"), SR("Hematite"), KIN("Hematite_PK")
+    -end
+
+SOLUTION 0  External boundary fluid at outer shell rim (Stage-2)
+    temp      240.0
+    pressure  27.0
+    pH        8.0
+    pe        0.0
+    redox     pe
+    units     mol/kgw
+    Na        1.05
+    Cl        0.5 charge
+    P(5)      0.1
+    Cu(1)     0.0006432716002312078
+    Fe(3)     0.00030560699980732676
+    S(-2)     0.02397170599757541
+    Au(3)     0.0001
+    K         0.001
+    -water    0.008
+SAVE solution 0
+
+TRANSPORT
+    -cells                 10
+    -shifts                3
+    -time_step             10000.0
+    -flow_direction        diffusion_only
+    -boundary_conditions   constant closed
+    -lengths               0.001
+    -dispersivities        1e-06
+    -diffusion_coefficient 1e-09
+    -punch_cells           1-10
+    -punch_frequency       1
+
+END
+
+# --- Stage 03 ---
+
+TITLE Shell-to-core diffusion replacement: Sequential Stage 3
+SELECTED_OUTPUT 1
+    -reset false
+    -step true
+    -soln true
+    -dist true
+    -time true
+    -temperature true
+    -pH true
+    -pe true
+    -charge_balance true
+    -percent_error true
+    -totals                Na  Cl  K  P  Cu  Fe  S  Au  P(5)  Cu(1)  Cu(2)  Fe(2)  Fe(3)  S(-2)  S(6)  Au(1)  Au(3)
+    -molalities            Fe+2  Fe+3  FeOH+  FeOH+2  FeCl+  FeCl+2  FeCl2  FeCl2+  Fe(OH)4-
+    -activities            SO4-2  Cu(HS)2-  Au(HS)2-  AuHS  H+  OH-  HS-  H2S  Au(OH)2-  Au+  Au+3  AuCl  AuCl2-  AuCl3-2  AuCl4-  AuOH  Cu2S(HS)2-2  CuCl+  CuCl2  CuCl2-  CuCl3-  CuCl3-2  CuCl4-2  CuHS  CuCl  CuOH  CuOH+  H2S  HS-  S-2
+    -equilibrium_phases    Magnetite  Chalcocite(alpha)  Chalcopyrite(alpha)  Bornite(alpha)  Au(element)  Pyrite  Cu(element)
+    -saturation_indices    Hematite  Magnetite  Chalcocite(alpha)  Pyrite  Chalcopyrite(alpha)  Bornite(alpha)  Cu(element)  Au(element)
+    -kinetic_reactants     Hematite_PK
+USER_PUNCH 1
+    -headings stage u_step time_days pH_user logaHS- logaH2S SR_Hematite HematitePK_m
+    -start
+10 PUNCH 3, STEP_NO, TOTAL_TIME/3600/24, -LA("H+"), LA("HS-"), LA("H2S"), SR("Hematite"), KIN("Hematite_PK")
+    -end
+
+SOLUTION 0  External boundary fluid at outer shell rim (Stage-3)
+    temp      240.0
+    pressure  27.0
+    pH        8.0
+    pe        0.0
+    redox     pe
+    units     mol/kgw
+    Na        1.05
+    Cl        0.5 charge
+    P(5)      0.1
+    Cu(1)     0.0006329430826346536
+    Fe(3)     0.00031421409780445523
+    S(-2)     0.02391390907289653
+    Au(3)     0.0001
+    K         0.001
+    -water    0.008
+SAVE solution 0
+
+TRANSPORT
+    -cells                 10
+    -shifts                4
+    -time_step             10000.0
+    -flow_direction        diffusion_only
+    -boundary_conditions   constant closed
+    -lengths               0.001
+    -dispersivities        1e-06
+    -diffusion_coefficient 1e-09
+    -punch_cells           1-10
+    -punch_frequency       1
+
+END
+
+# --- Stage 04 ---
+
+TITLE Shell-to-core diffusion replacement: Sequential Stage 4
+SELECTED_OUTPUT 1
+    -reset false
+    -step true
+    -soln true
+    -dist true
+    -time true
+    -temperature true
+    -pH true
+    -pe true
+    -charge_balance true
+    -percent_error true
+    -totals                Na  Cl  K  P  Cu  Fe  S  Au  P(5)  Cu(1)  Cu(2)  Fe(2)  Fe(3)  S(-2)  S(6)  Au(1)  Au(3)
+    -molalities            Fe+2  Fe+3  FeOH+  FeOH+2  FeCl+  FeCl+2  FeCl2  FeCl2+  Fe(OH)4-
+    -activities            SO4-2  Cu(HS)2-  Au(HS)2-  AuHS  H+  OH-  HS-  H2S  Au(OH)2-  Au+  Au+3  AuCl  AuCl2-  AuCl3-2  AuCl4-  AuOH  Cu2S(HS)2-2  CuCl+  CuCl2  CuCl2-  CuCl3-  CuCl3-2  CuCl4-2  CuHS  CuCl  CuOH  CuOH+  H2S  HS-  S-2
+    -equilibrium_phases    Magnetite  Chalcocite(alpha)  Chalcopyrite(alpha)  Bornite(alpha)  Au(element)  Pyrite  Cu(element)
+    -saturation_indices    Hematite  Magnetite  Chalcocite(alpha)  Pyrite  Chalcopyrite(alpha)  Bornite(alpha)  Cu(element)  Au(element)
+    -kinetic_reactants     Hematite_PK
+USER_PUNCH 1
+    -headings stage u_step time_days pH_user logaHS- logaH2S SR_Hematite HematitePK_m
+    -start
+10 PUNCH 4, STEP_NO, TOTAL_TIME/3600/24, -LA("H+"), LA("HS-"), LA("H2S"), SR("Hematite"), KIN("Hematite_PK")
+    -end
+
+SOLUTION 0  External boundary fluid at outer shell rim (Stage-4)
+    temp      240.0
+    pressure  27.0
+    pH        8.0
+    pe        0.0
+    redox     pe
+    units     mol/kgw
+    Na        1.05
+    Cl        0.5 charge
+    P(5)      0.1
+    Cu(1)     0.0006170881573317418
+    Fe(3)     0.0003274265355568818
+    S(-2)     0.023795845730276842
+    Au(3)     0.0001
+    K         0.001
+    -water    0.008
+SAVE solution 0
+
+TRANSPORT
+    -cells                 10
+    -shifts                10
+    -time_step             10000.0
+    -flow_direction        diffusion_only
+    -boundary_conditions   constant closed
+    -lengths               0.001
+    -dispersivities        1e-06
+    -diffusion_coefficient 1e-09
+    -punch_cells           1-10
+    -punch_frequency       1
+
+END
+
+# --- Stage 05 ---
+
+TITLE Shell-to-core diffusion replacement: Sequential Stage 5
+SELECTED_OUTPUT 1
+    -reset false
+    -step true
+    -soln true
+    -dist true
+    -time true
+    -temperature true
+    -pH true
+    -pe true
+    -charge_balance true
+    -percent_error true
+    -totals                Na  Cl  K  P  Cu  Fe  S  Au  P(5)  Cu(1)  Cu(2)  Fe(2)  Fe(3)  S(-2)  S(6)  Au(1)  Au(3)
+    -molalities            Fe+2  Fe+3  FeOH+  FeOH+2  FeCl+  FeCl+2  FeCl2  FeCl2+  Fe(OH)4-
+    -activities            SO4-2  Cu(HS)2-  Au(HS)2-  AuHS  H+  OH-  HS-  H2S  Au(OH)2-  Au+  Au+3  AuCl  AuCl2-  AuCl3-2  AuCl4-  AuOH  Cu2S(HS)2-2  CuCl+  CuCl2  CuCl2-  CuCl3-  CuCl3-2  CuCl4-2  CuHS  CuCl  CuOH  CuOH+  H2S  HS-  S-2
+    -equilibrium_phases    Magnetite  Chalcocite(alpha)  Chalcopyrite(alpha)  Bornite(alpha)  Au(element)  Pyrite  Cu(element)
+    -saturation_indices    Hematite  Magnetite  Chalcocite(alpha)  Pyrite  Chalcopyrite(alpha)  Bornite(alpha)  Cu(element)  Au(element)
+    -kinetic_reactants     Hematite_PK
+USER_PUNCH 1
+    -headings stage u_step time_days pH_user logaHS- logaH2S SR_Hematite HematitePK_m
+    -start
+10 PUNCH 5, STEP_NO, TOTAL_TIME/3600/24, -LA("H+"), LA("HS-"), LA("H2S"), SR("Hematite"), KIN("Hematite_PK")
+    -end
+
+SOLUTION 0  External boundary fluid at outer shell rim (Stage-5)
+    temp      240.0
+    pressure  27.0
+    pH        8.0
+    pe        0.0
+    redox     pe
+    units     mol/kgw
+    Na        1.05
+    Cl        0.5 charge
+    P(5)      0.1
+    Cu(1)     0.0005927498479847374
+    Fe(3)     0.0003477084600127188
+    S(-2)     0.0235546745443015
+    Au(3)     0.0001
+    K         0.001
+    -water    0.008
+SAVE solution 0
+
+TRANSPORT
+    -cells                 10
+    -shifts                15
+    -time_step             10000.0
+    -flow_direction        diffusion_only
+    -boundary_conditions   constant closed
+    -lengths               0.001
+    -dispersivities        1e-06
+    -diffusion_coefficient 1e-09
+    -punch_cells           1-10
+    -punch_frequency       1
+
+END
+
+# --- Stage 06 ---
+
+TITLE Shell-to-core diffusion replacement: Sequential Stage 6
+SELECTED_OUTPUT 1
+    -reset false
+    -step true
+    -soln true
+    -dist true
+    -time true
+    -temperature true
+    -pH true
+    -pe true
+    -charge_balance true
+    -percent_error true
+    -totals                Na  Cl  K  P  Cu  Fe  S  Au  P(5)  Cu(1)  Cu(2)  Fe(2)  Fe(3)  S(-2)  S(6)  Au(1)  Au(3)
+    -molalities            Fe+2  Fe+3  FeOH+  FeOH+2  FeCl+  FeCl+2  FeCl2  FeCl2+  Fe(OH)4-
+    -activities            SO4-2  Cu(HS)2-  Au(HS)2-  AuHS  H+  OH-  HS-  H2S  Au(OH)2-  Au+  Au+3  AuCl  AuCl2-  AuCl3-2  AuCl4-  AuOH  Cu2S(HS)2-2  CuCl+  CuCl2  CuCl2-  CuCl3-  CuCl3-2  CuCl4-2  CuHS  CuCl  CuOH  CuOH+  H2S  HS-  S-2
+    -equilibrium_phases    Magnetite  Chalcocite(alpha)  Chalcopyrite(alpha)  Bornite(alpha)  Au(element)  Pyrite  Cu(element)
+    -saturation_indices    Hematite  Magnetite  Chalcocite(alpha)  Pyrite  Chalcopyrite(alpha)  Bornite(alpha)  Cu(element)  Au(element)
+    -kinetic_reactants     Hematite_PK
+USER_PUNCH 1
+    -headings stage u_step time_days pH_user logaHS- logaH2S SR_Hematite HematitePK_m
+    -start
+10 PUNCH 6, STEP_NO, TOTAL_TIME/3600/24, -LA("H+"), LA("HS-"), LA("H2S"), SR("Hematite"), KIN("Hematite_PK")
+    -end
+
+SOLUTION 0  External boundary fluid at outer shell rim (Stage-6)
+    temp      240.0
+    pressure  27.0
+    pH        8.0
+    pe        0.0
+    redox     pe
+    units     mol/kgw
+    Na        1.05
+    Cl        0.5 charge
+    P(5)      0.1
+    Cu(1)     0.0005553890095983406
+    Fe(3)     0.0003788424920013828
+    S(-2)     0.023062027634141478
+    Au(3)     0.0001
+    K         0.001
+    -water    0.008
+SAVE solution 0
+
+TRANSPORT
+    -cells                 10
+    -shifts                16
+    -time_step             10000.0
+    -flow_direction        diffusion_only
+    -boundary_conditions   constant closed
+    -lengths               0.001
+    -dispersivities        1e-06
+    -diffusion_coefficient 1e-09
+    -punch_cells           1-10
+    -punch_frequency       1
+
+END
+
+# --- Stage 07 ---
+
+TITLE Shell-to-core diffusion replacement: Sequential Stage 7
+SELECTED_OUTPUT 1
+    -reset false
+    -step true
+    -soln true
+    -dist true
+    -time true
+    -temperature true
+    -pH true
+    -pe true
+    -charge_balance true
+    -percent_error true
+    -totals                Na  Cl  K  P  Cu  Fe  S  Au  P(5)  Cu(1)  Cu(2)  Fe(2)  Fe(3)  S(-2)  S(6)  Au(1)  Au(3)
+    -molalities            Fe+2  Fe+3  FeOH+  FeOH+2  FeCl+  FeCl+2  FeCl2  FeCl2+  Fe(OH)4-
+    -activities            SO4-2  Cu(HS)2-  Au(HS)2-  AuHS  H+  OH-  HS-  H2S  Au(OH)2-  Au+  Au+3  AuCl  AuCl2-  AuCl3-2  AuCl4-  AuOH  Cu2S(HS)2-2  CuCl+  CuCl2  CuCl2-  CuCl3-  CuCl3-2  CuCl4-2  CuHS  CuCl  CuOH  CuOH+  H2S  HS-  S-2
+    -equilibrium_phases    Magnetite  Chalcocite(alpha)  Chalcopyrite(alpha)  Bornite(alpha)  Au(element)  Pyrite  Cu(element)
+    -saturation_indices    Hematite  Magnetite  Chalcocite(alpha)  Pyrite  Chalcopyrite(alpha)  Bornite(alpha)  Cu(element)  Au(element)
+    -kinetic_reactants     Hematite_PK
+USER_PUNCH 1
+    -headings stage u_step time_days pH_user logaHS- logaH2S SR_Hematite HematitePK_m
+    -start
+10 PUNCH 7, STEP_NO, TOTAL_TIME/3600/24, -LA("H+"), LA("HS-"), LA("H2S"), SR("Hematite"), KIN("Hematite_PK")
+    -end
+
+SOLUTION 0  External boundary fluid at outer shell rim (Stage-7)
+    temp      240.0
+    pressure  27.0
+    pH        8.0
+    pe        0.0
+    redox     pe
+    units     mol/kgw
+    Na        1.05
+    Cl        0.5 charge
+    P(5)      0.1
+    Cu(1)     0.0004980377685966208
+    Fe(3)     0.0004266351928361493
+    S(-2)     0.02205568445467463
+    Au(3)     0.0001
+    K         0.001
+    -water    0.008
+SAVE solution 0
+
+TRANSPORT
+    -cells                 10
+    -shifts                19
+    -time_step             10000.0
+    -flow_direction        diffusion_only
+    -boundary_conditions   constant closed
+    -lengths               0.001
+    -dispersivities        1e-06
+    -diffusion_coefficient 1e-09
+    -punch_cells           1-10
+    -punch_frequency       1
+
+END
+
+# --- Stage 08 ---
+
+TITLE Shell-to-core diffusion replacement: Sequential Stage 8
+SELECTED_OUTPUT 1
+    -reset false
+    -step true
+    -soln true
+    -dist true
+    -time true
+    -temperature true
+    -pH true
+    -pe true
+    -charge_balance true
+    -percent_error true
+    -totals                Na  Cl  K  P  Cu  Fe  S  Au  P(5)  Cu(1)  Cu(2)  Fe(2)  Fe(3)  S(-2)  S(6)  Au(1)  Au(3)
+    -molalities            Fe+2  Fe+3  FeOH+  FeOH+2  FeCl+  FeCl+2  FeCl2  FeCl2+  Fe(OH)4-
+    -activities            SO4-2  Cu(HS)2-  Au(HS)2-  AuHS  H+  OH-  HS-  H2S  Au(OH)2-  Au+  Au+3  AuCl  AuCl2-  AuCl3-2  AuCl4-  AuOH  Cu2S(HS)2-2  CuCl+  CuCl2  CuCl2-  CuCl3-  CuCl3-2  CuCl4-2  CuHS  CuCl  CuOH  CuOH+  H2S  HS-  S-2
+    -equilibrium_phases    Magnetite  Chalcocite(alpha)  Chalcopyrite(alpha)  Bornite(alpha)  Au(element)  Pyrite  Cu(element)
+    -saturation_indices    Hematite  Magnetite  Chalcocite(alpha)  Pyrite  Chalcopyrite(alpha)  Bornite(alpha)  Cu(element)  Au(element)
+    -kinetic_reactants     Hematite_PK
+USER_PUNCH 1
+    -headings stage u_step time_days pH_user logaHS- logaH2S SR_Hematite HematitePK_m
+    -start
+10 PUNCH 8, STEP_NO, TOTAL_TIME/3600/24, -LA("H+"), LA("HS-"), LA("H2S"), SR("Hematite"), KIN("Hematite_PK")
+    -end
+
+SOLUTION 0  External boundary fluid at outer shell rim (Stage-8)
+    temp      240.0
+    pressure  27.0
+    pH        8.0
+    pe        0.0
+    redox     pe
+    units     mol/kgw
+    Na        1.05
+    Cl        0.5 charge
+    P(5)      0.1
+    Cu(1)     0.00041
+    Fe(3)     0.0005
+    S(-2)     0.02
+    Au(3)     0.0001
+    K         0.001
+    -water    0.008
+SAVE solution 0
+
+TRANSPORT
+    -cells                 10
+    -shifts                20
+    -time_step             10000.0
+    -flow_direction        diffusion_only
+    -boundary_conditions   constant closed
+    -lengths               0.001
+    -dispersivities        1e-06
+    -diffusion_coefficient 1e-09
+    -punch_cells           1-10
+    -punch_frequency       1
+
+END

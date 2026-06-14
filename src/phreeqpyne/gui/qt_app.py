@@ -20,6 +20,7 @@ import matplotlib.ticker as mticker
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QColorDialog,
@@ -82,10 +83,29 @@ class PlotWindow(QMainWindow):
         self.setWindowTitle("PhreeqPyne Plot")
         self.figure = Figure(figsize=(8, 5))
         self.canvas = FigureCanvas(self.figure)
-        self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setCentralWidget(self.canvas)
+        self.scroll_area = FlexibleScrollArea(self)
+        self.scroll_area.setWidget(self.canvas)
+        self.setCentralWidget(self.scroll_area)
+        self.lock_figure_size = True
+        self.set_lock_figure_size(True)
         self.setMinimumSize(320, 240)
         self.resize(1000, 700)
+
+    def set_lock_figure_size(self, locked: bool) -> None:
+        self.lock_figure_size = locked
+        self.scroll_area.setWidgetResizable(not locked)
+        if locked:
+            self.canvas.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            self._sync_canvas_to_figure()
+            return
+        self.canvas.setMinimumSize(0, 0)
+        self.canvas.setMaximumSize(16777215, 16777215)
+        self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    def _sync_canvas_to_figure(self) -> None:
+        width = max(1, int(round(self.figure.get_figwidth() * self.figure.dpi)))
+        height = max(1, int(round(self.figure.get_figheight() * self.figure.dpi)))
+        self.canvas.setFixedSize(width, height)
 
 
 class ScenarioEditor(QMainWindow):
@@ -94,22 +114,29 @@ class ScenarioEditor(QMainWindow):
     LINE_COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#17becf", "#8c564b", "#7f7f7f"]
     STACK_FILL_COLORS = ["#9ecae1", "#fdae6b", "#a1d99b", "#c7b9d6", "#fdd0a2", "#9edae5", "#c49c94", "#c7c7c7"]
     STACK_LINE_COLORS = ["#1f77b4", "#e6550d", "#31a354", "#756bb1", "#fd8d3c", "#17becf", "#8c564b", "#636363"]
+    RIGHT_AXIS_SPACING = 0.22
+    EXTRA_RIGHT_AXIS_WIDTH_INCHES = 0.75
 
-    def __init__(self, simulation_kind: str) -> None:
+    def __init__(self, simulation_kind: str, working_dir: Path | None = None) -> None:
         super().__init__()
         self.config = default_model_config()
         self.simulation_kind_value = simulation_kind
+        self.working_dir = working_dir
         self.config.simulation_kind = simulation_kind
+        if self.working_dir is not None:
+            self.config.runtime.output_dir = str(self.working_dir)
         self.stage_shift_fields: list[QSpinBox] = []
         self.boundary_base_fields: dict[str, QLineEdit] = {}
         self.boundary_rows: list[dict[str, object]] = []
         self.database_elements: list[str] = []
         self.gradient_rows: list[dict[str, object]] = []
+        self.equilibrium_phase_rows: list[dict[str, object]] = []
         self.species_fields: dict[str, dict[str, QWidget]] = {}
         self.initial_solution_fields: dict[str, QLineEdit] = {}
         self.kinetics_fields: dict[str, QLineEdit] = {}
         self.transport_fields: dict[str, QLineEdit] = {}
         self.titration_fields: dict[str, QLineEdit] = {}
+        self.titration_component_rows: list[dict[str, object]] = []
         self.rates_block_baseline = ""
         self.rates_block_loaded_custom = False
         self.plot_data: pd.DataFrame | None = None
@@ -120,6 +147,8 @@ class ScenarioEditor(QMainWindow):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._build_form()
         self._clear_startup_fields()
+        if self.working_dir is not None:
+            self.output_dir.setText(str(self.working_dir))
 
     def _build_form(self) -> None:
         root = QWidget(self)
@@ -153,6 +182,7 @@ class ScenarioEditor(QMainWindow):
         if self.simulation_kind_value == "transport":
             self.tabs.addTab(self._scroll_tab(self._build_initial_solution_group()), "Initial")
             self.tabs.addTab(self._scroll_tab(self._build_kinetics_group()), "Kinetics")
+        self.tabs.addTab(self._scroll_tab(self._build_equilibrium_phases_group()), "Equilibrium phases")
         self.tabs.addTab(self._scroll_tab(self._build_plot_tab()), "Plot")
         layout.addWidget(self.tabs)
 
@@ -195,6 +225,9 @@ class ScenarioEditor(QMainWindow):
             self.titration_solution_source.setCurrentIndex(-1)
         if hasattr(self, "titration_incremental"):
             self.titration_incremental.setCurrentIndex(-1)
+        if hasattr(self, "titration_component_rows_layout"):
+            self.clear_titration_component_rows()
+            self.add_titration_component_row()
         if hasattr(self, "boundary_left_condition"):
             self.boundary_left_condition.setCurrentIndex(-1)
         if hasattr(self, "boundary_right_condition"):
@@ -203,6 +236,7 @@ class ScenarioEditor(QMainWindow):
             field.clear()
         self.clear_boundary_rows()
         self.database_elements = []
+        self.clear_equilibrium_phase_rows()
         for field in self.initial_solution_fields.values():
             field.clear()
         self.clear_gradient_rows()
@@ -239,6 +273,7 @@ class ScenarioEditor(QMainWindow):
         self.plot_grid_enabled.setCurrentText("on")
         self.plot_grid_axis.setCurrentText("both")
         self.plot_grid_style.setCurrentText("-")
+        self.plot_lock_figure_size.setCurrentText("on")
         self.clear_plot_layers()
         self.status.setText("Blank case. Load a saved config or enter parameters.")
 
@@ -305,16 +340,24 @@ class ScenarioEditor(QMainWindow):
         self.titration_solution_source.addItems(["reaction_solution"])
         self.titration_solution_source.setToolTip("Use the homogeneous reaction solution from the Reaction solution tab.")
         form.addRow("solution_source", self.titration_solution_source)
-        for key in ["reaction_components", "reaction_total_moles", "reaction_steps"]:
+        for key in ["reaction_steps"]:
             field = QLineEdit()
             self.titration_fields[key] = field
             form.addRow(key, field)
         self.titration_incremental = QComboBox()
         self.titration_incremental.addItems(["true", "false"])
         form.addRow("incremental_reactions", self.titration_incremental)
-        hint = QLabel("reaction_components accepts entries like Hematite, 5e-7; separate multiple reactants with semicolons. PHREEQC equilibrates after each reaction step.")
-        hint.setWordWrap(True)
-        form.addRow("Format", hint)
+        component_group = QGroupBox("Reaction component additions")
+        component_layout = QVBoxLayout(component_group)
+        component_buttons = QHBoxLayout()
+        add_component = QPushButton("Add reaction component")
+        add_component.clicked.connect(lambda: self.add_titration_component_row())
+        component_buttons.addWidget(add_component)
+        component_buttons.addWidget(QLabel("Each card defines the total added amount and how its per-step increment changes."))
+        component_layout.addLayout(component_buttons)
+        self.titration_component_rows_layout = QVBoxLayout()
+        component_layout.addLayout(self.titration_component_rows_layout)
+        form.addRow("reaction_components", component_group)
         return group
 
     def _solution_tab_title(self) -> str:
@@ -461,14 +504,18 @@ class ScenarioEditor(QMainWindow):
         spec = spec or {}
         row_group, header, content = self._make_collapsible_card("Component")
         row_layout = QFormLayout()
-        preview_figure = Figure(figsize=(2.4, 1.2))
-        preview_canvas = FigureCanvas(preview_figure)
+        preview_figure = None
+        preview_canvas = None
+        if self.simulation_kind_value == "transport":
+            preview_figure = Figure(figsize=(2.4, 1.2))
+            preview_canvas = FigureCanvas(preview_figure)
         content_layout = QHBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
         controls = QWidget(content)
         controls.setLayout(row_layout)
         content_layout.addWidget(controls, 2)
-        content_layout.addWidget(preview_canvas, 1)
+        if preview_canvas is not None:
+            content_layout.addWidget(preview_canvas, 1)
         element_combo = QComboBox()
         element_combo.addItems(self.database_elements or self._load_database_elements(self.database_path.text().strip()))
         element_combo.setEditable(True)
@@ -523,6 +570,8 @@ class ScenarioEditor(QMainWindow):
         self._set_card_title(row["header"], row["content"], f"Component: {element}")
         self._update_mode_shape_field(row)
         figure = row["preview_figure"]
+        if figure is None:
+            return
         figure.clear()
         axis = figure.add_subplot(111)
         try:
@@ -575,6 +624,134 @@ class ScenarioEditor(QMainWindow):
         for row in self.boundary_rows:
             row["widget"].setParent(None)
         self.boundary_rows.clear()
+
+    def add_titration_component_row(
+        self,
+        name: str = "Hematite",
+        total: object = "5e-5",
+        start_weight: object = "1",
+        end_weight: object = "1",
+        mode: str = "linear",
+        shape_k: object = "3.0",
+        start_step: object = "1",
+        end_step: object = "",
+        addition_type: str = "phase",
+    ) -> None:
+        row_group, header, content = self._make_collapsible_card("Reaction component")
+        row_layout = QFormLayout()
+        preview_figure = Figure(figsize=(3.0, 1.4))
+        preview_canvas = FigureCanvas(preview_figure)
+        content_layout = QHBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        controls = QWidget(content)
+        controls.setLayout(row_layout)
+        content_layout.addWidget(controls, 2)
+        content_layout.addWidget(preview_canvas, 1)
+
+        name_field = QLineEdit(str(name))
+        total_field = QLineEdit("" if total is None else str(total))
+        start_field = QLineEdit("" if start_weight is None else str(start_weight))
+        end_field = QLineEdit("" if end_weight is None else str(end_weight))
+        mode_combo = QComboBox()
+        mode_combo.addItems(["linear", "log", "exp"])
+        self._select_combo_text(mode_combo, [str(mode or "linear")])
+        shape_field = QLineEdit("" if shape_k is None else str(shape_k))
+        start_step_field = QLineEdit("" if start_step is None else str(start_step))
+        end_step_field = QLineEdit("" if end_step is None else str(end_step))
+        type_combo = QComboBox()
+        type_combo.addItems(["phase", "solution"])
+        self._select_combo_text(type_combo, [str(addition_type or "phase")])
+        remove = QPushButton("Remove")
+        row = {
+            "widget": row_group,
+            "header": header,
+            "content": content,
+            "name": name_field,
+            "total": total_field,
+            "start_weight": start_field,
+            "end_weight": end_field,
+            "mode": mode_combo,
+            "shape_k": shape_field,
+            "start_step": start_step_field,
+            "end_step": end_step_field,
+            "addition_type": type_combo,
+            "preview_figure": preview_figure,
+            "preview_canvas": preview_canvas,
+        }
+        remove.clicked.connect(lambda: self.remove_titration_component_row(row))
+        name_field.textChanged.connect(lambda: self._refresh_titration_component_row(row))
+        total_field.textChanged.connect(lambda: self._refresh_titration_component_row(row))
+        start_field.textChanged.connect(lambda: self._refresh_titration_component_row(row))
+        end_field.textChanged.connect(lambda: self._refresh_titration_component_row(row))
+        mode_combo.currentTextChanged.connect(lambda: self._refresh_titration_component_row(row))
+        shape_field.textChanged.connect(lambda: self._refresh_titration_component_row(row))
+        start_step_field.textChanged.connect(lambda: self._refresh_titration_component_row(row))
+        end_step_field.textChanged.connect(lambda: self._refresh_titration_component_row(row))
+        type_combo.currentTextChanged.connect(lambda: self._refresh_titration_component_row(row))
+        if "reaction_steps" in self.titration_fields:
+            self.titration_fields["reaction_steps"].textChanged.connect(lambda: self._refresh_titration_component_row(row))
+        row_layout.addRow("Reactant / component", name_field)
+        row_layout.addRow("Addition type", type_combo)
+        row_layout.addRow("Total added amount", total_field)
+        row_layout.addRow("Start step", start_step_field)
+        row_layout.addRow("End step", end_step_field)
+        row_layout.addRow("Start weight", start_field)
+        row_layout.addRow("End weight", end_field)
+        row_layout.addRow("Mode", mode_combo)
+        row_layout.addRow("Shape k", shape_field)
+        row_layout.addRow("", remove)
+        self.titration_component_rows.append(row)
+        self.titration_component_rows_layout.addWidget(row_group)
+        self._refresh_titration_component_row(row)
+        self.preview_titration_schedule()
+
+    def remove_titration_component_row(self, row: dict[str, object]) -> None:
+        if row in self.titration_component_rows:
+            self.titration_component_rows.remove(row)
+        row["widget"].setParent(None)
+        self.preview_titration_schedule()
+
+    def clear_titration_component_rows(self) -> None:
+        for row in self.titration_component_rows:
+            row["widget"].setParent(None)
+        self.titration_component_rows.clear()
+
+    def _refresh_titration_component_row(self, row: dict[str, object]) -> None:
+        name = row["name"].text().strip() or "unselected"
+        self._set_card_title(row["header"], row["content"], f"Add: {name}")
+        figure = row["preview_figure"]
+        figure.clear()
+        axis = figure.add_subplot(111)
+        try:
+            component = self._titration_row_to_component(row)
+            steps = int(self.titration_fields.get("reaction_steps", QLineEdit("1")).text() or 1)
+            values = self._component_step_values(component, steps)
+            xs = list(range(1, len(values) + 1))
+            axis.plot(xs, values, color="#7c3aed", linewidth=1.8, marker="o", markersize=2.4)
+            axis.fill_between(xs, values, min(values) if values else 0.0, color="#ddd6fe", alpha=0.5)
+            axis.set_xlabel("step", fontsize=7)
+            axis.set_ylabel("addition", fontsize=7)
+            axis.tick_params(labelsize=7)
+            axis.grid(True, alpha=0.25)
+        except Exception:
+            axis.text(0.5, 0.5, "invalid", ha="center", va="center")
+            axis.set_axis_off()
+        figure.tight_layout(pad=0.4)
+        row["preview_canvas"].draw_idle()
+        self.preview_titration_schedule()
+
+    def _titration_row_to_component(self, row: dict[str, object]) -> dict[str, object]:
+        return {
+            "name": row["name"].text().strip(),
+            "total": float(row["total"].text().strip()),
+            "start": float(row["start_weight"].text().strip() or 1.0),
+            "end": float(row["end_weight"].text().strip() or row["start_weight"].text().strip() or 1.0),
+            "mode": row["mode"].currentText() or "linear",
+            "shape_k": float(row["shape_k"].text().strip() or 3.0),
+            "start_step": int(row["start_step"].text().strip() or 1),
+            "end_step": None if not row["end_step"].text().strip() else int(row["end_step"].text().strip()),
+            "addition_type": row["addition_type"].currentText() or "phase",
+        }
 
     def _build_initial_solution_group(self) -> QGroupBox:
         group = QGroupBox("Initial pore solution")
@@ -736,6 +913,99 @@ class ScenarioEditor(QMainWindow):
             }
         return species_config
 
+    def _build_equilibrium_phases_group(self) -> QGroupBox:
+        group = QGroupBox("Equilibrium phases")
+        layout = QVBoxLayout(group)
+        hint = QLabel(
+            "Set phase name, target saturation index/log fugacity, and available amount. Positive amount limits precipitation capacity; 0 means no initial amount but allows equilibrium control."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        buttons = QHBoxLayout()
+        add_phase = QPushButton("Add phase")
+        add_phase.clicked.connect(lambda: self.add_equilibrium_phase_row())
+        buttons.addWidget(add_phase)
+        layout.addLayout(buttons)
+        self.equilibrium_phases_layout = QVBoxLayout()
+        layout.addLayout(self.equilibrium_phases_layout)
+        return group
+
+    def add_equilibrium_phase_row(
+        self,
+        name: object = "Hematite",
+        saturation_index: object = 0,
+        amount: object = 0,
+        option: object = "",
+    ) -> None:
+        row_group, header, content = self._make_collapsible_card("Phase")
+        row_layout = QFormLayout(content)
+        name_field = QLineEdit(str(name))
+        si_field = QLineEdit(str(saturation_index))
+        amount_field = QLineEdit(str(amount))
+        option_field = QLineEdit("" if option is None else str(option))
+        remove = QPushButton("Remove")
+        row = {
+            "widget": row_group,
+            "header": header,
+            "content": content,
+            "name": name_field,
+            "si": si_field,
+            "amount": amount_field,
+            "option": option_field,
+        }
+        remove.clicked.connect(lambda: self.remove_equilibrium_phase_row(row))
+        name_field.textChanged.connect(lambda: self._refresh_equilibrium_phase_row(row))
+        si_field.textChanged.connect(lambda: self._refresh_equilibrium_phase_row(row))
+        amount_field.textChanged.connect(lambda: self._refresh_equilibrium_phase_row(row))
+        row_layout.addRow("Phase", name_field)
+        row_layout.addRow("Target SI / log f", si_field)
+        row_layout.addRow("Amount", amount_field)
+        row_layout.addRow("Option", option_field)
+        row_layout.addRow("", remove)
+        self.equilibrium_phase_rows.append(row)
+        self.equilibrium_phases_layout.addWidget(row_group)
+        self._refresh_equilibrium_phase_row(row)
+
+    def remove_equilibrium_phase_row(self, row: dict[str, object]) -> None:
+        if row in self.equilibrium_phase_rows:
+            self.equilibrium_phase_rows.remove(row)
+        row["widget"].setParent(None)
+
+    def clear_equilibrium_phase_rows(self) -> None:
+        for row in self.equilibrium_phase_rows:
+            row["widget"].setParent(None)
+        self.equilibrium_phase_rows.clear()
+
+    def _refresh_equilibrium_phase_row(self, row: dict[str, object]) -> None:
+        name = row["name"].text().strip() or "unselected"
+        si = row["si"].text().strip() or "0"
+        amount = row["amount"].text().strip() or "0"
+        self._set_card_title(row["header"], row["content"], f"{name}: SI/logf {si}, amount {amount}")
+
+    def _load_equilibrium_phase_rows(self) -> None:
+        self.clear_equilibrium_phase_rows()
+        for phase in self.config.equilibrium_phases:
+            if len(phase) == 4:
+                name, si, amount, option = phase
+            elif len(phase) == 3:
+                name, si, amount = phase
+                option = ""
+            else:
+                continue
+            self.add_equilibrium_phase_row(name, si, amount, option)
+
+    def _equilibrium_phase_rows_to_config(self) -> list[tuple[object, ...]]:
+        phases: list[tuple[object, ...]] = []
+        for row in self.equilibrium_phase_rows:
+            name = row["name"].text().strip()
+            if not name:
+                continue
+            si = float(row["si"].text() or 0)
+            amount = float(row["amount"].text() or 0)
+            option = row["option"].text().strip()
+            phases.append((name, si, amount, option or None))
+        return phases
+
     def _build_kinetics_group(self) -> QGroupBox:
         group = QGroupBox("Kinetics")
         layout = QFormLayout(group)
@@ -830,6 +1100,8 @@ class ScenarioEditor(QMainWindow):
         self.plot_grid_alpha = QLineEdit("0.25")
         self.plot_figure_width = QLineEdit("8")
         self.plot_figure_height = QLineEdit("5")
+        self.plot_lock_figure_size = QComboBox()
+        self.plot_lock_figure_size.addItems(["on", "off"])
         style_form.addRow("Fill alpha", self.plot_stack_alpha)
         style_form.addRow("Legend", self.plot_legend_location)
         style_form.addRow("Font family", self.plot_font_family)
@@ -847,6 +1119,7 @@ class ScenarioEditor(QMainWindow):
         style_form.addRow("Grid alpha", self.plot_grid_alpha)
         style_form.addRow("Figure width", self.plot_figure_width)
         style_form.addRow("Figure height", self.plot_figure_height)
+        style_form.addRow("Lock figure size", self.plot_lock_figure_size)
         layout.addWidget(style_group)
 
         self.plot_layers_box = QGroupBox("Y layers")
@@ -1058,15 +1331,13 @@ class ScenarioEditor(QMainWindow):
         if self.titration_fields:
             titration_params = self.config.titration_params
             self._set_combo_text_or_add(self.titration_solution_source, str(titration_params.get("solution_source", "boundary")))
-            self.titration_fields["reaction_components"].setText(
-                self._format_reaction_components(titration_params.get("reaction_components", []))
-            )
-            self.titration_fields["reaction_total_moles"].setText(str(titration_params.get("reaction_total_moles", 1.0)))
             self.titration_fields["reaction_steps"].setText(str(titration_params.get("reaction_steps", 1000)))
+            self._load_titration_component_rows(titration_params.get("reaction_components", []))
             self._set_combo_text_or_add(
                 self.titration_incremental,
                 "true" if bool(titration_params.get("incremental_reactions", True)) else "false",
             )
+            self.preview_titration_schedule()
         if hasattr(self, "boundary_left_condition") and hasattr(self, "boundary_right_condition"):
             boundary_condition = str(self.config.transport_params.get("boundary_conditions", "constant closed"))
             condition_parts = boundary_condition.split()
@@ -1090,6 +1361,7 @@ class ScenarioEditor(QMainWindow):
         if hasattr(self, "gradient_rows_layout"):
             self.clear_gradient_rows()
             self._load_gradient_rows(self.config.initial_pore_gradient)
+        self._load_equilibrium_phase_rows()
         for key, field in self.kinetics_fields.items():
             field.setText(str(self.config.hematite_kinetics.get(key, "")))
         if hasattr(self, "rates_block"):
@@ -1126,11 +1398,9 @@ class ScenarioEditor(QMainWindow):
             )
         if self.titration_fields:
             config.titration_params = {
+                "mode": "manual_step",
                 "solution_source": self.titration_solution_source.currentText().strip() or "boundary",
-                "reaction_components": self._parse_reaction_components(
-                    self.titration_fields["reaction_components"].text()
-                ),
-                "reaction_total_moles": float(self.titration_fields["reaction_total_moles"].text() or 1.0),
+                "reaction_components": self._titration_component_rows_to_config(),
                 "reaction_steps": int(self.titration_fields["reaction_steps"].text() or 1000),
                 "incremental_reactions": self.titration_incremental.currentText().lower() != "false",
             }
@@ -1159,6 +1429,7 @@ class ScenarioEditor(QMainWindow):
             if field.text().strip()
         }
         config.initial_pore_gradient = {"species": self._gradient_rows_to_config()}
+        config.equilibrium_phases = self._equilibrium_phase_rows_to_config()
         for key, field in self.kinetics_fields.items():
             text = field.text().strip()
             if key in {"rate_name", "formula"}:
@@ -1184,11 +1455,19 @@ class ScenarioEditor(QMainWindow):
         for component in components:
             if isinstance(component, (list, tuple)) and len(component) == 2:
                 lines.append(f"{component[0]}, {component[1]}")
+            elif isinstance(component, (list, tuple)) and len(component) == 3:
+                lines.append(f"{component[0]}, {component[1]} -> {component[2]}")
+            elif isinstance(component, dict):
+                amount = component.get("amount", component.get("start", ""))
+                if component.get("end") is None:
+                    lines.append(f"{component.get('name', '')}, {amount}")
+                else:
+                    lines.append(f"{component.get('name', '')}, {amount} -> {component.get('end')}")
         return "; ".join(lines)
 
     @staticmethod
-    def _parse_reaction_components(text: str) -> list[tuple[str, float]]:
-        components: list[tuple[str, float]] = []
+    def _parse_reaction_components(text: str) -> list[tuple[str, float] | tuple[str, float, float]]:
+        components: list[tuple[str, float] | tuple[str, float, float]] = []
         for raw_part in re.split(r"[;\n]+", text):
             part = raw_part.strip()
             if not part:
@@ -1201,8 +1480,223 @@ class ScenarioEditor(QMainWindow):
                     raise ValueError(f"Invalid reaction component: {part}")
                 name = " ".join(pieces[:-1])
                 amount = pieces[-1]
-            components.append((name.strip(), float(amount.strip())))
+            if "->" in amount:
+                start_text, end_text = amount.split("->", 1)
+                components.append((name.strip(), float(start_text.strip()), float(end_text.strip())))
+            else:
+                components.append((name.strip(), float(amount.strip())))
         return components or [("Hematite", 5e-7)]
+
+    def _load_titration_component_rows(self, components: object) -> None:
+        self.clear_titration_component_rows()
+        if not isinstance(components, list) or not components:
+            self.add_titration_component_row()
+            return
+        for component in components:
+            name = "Hematite"
+            total = 5e-5
+            start = 1.0
+            end = 1.0
+            mode = "linear"
+            shape_k = 3.0
+            start_step = 1
+            end_step = ""
+            addition_type = "phase"
+            if isinstance(component, dict):
+                name = str(component.get("name", name))
+                mode = str(component.get("mode", mode))
+                shape_k = component.get("shape_k", shape_k)
+                start_step = component.get("start_step", start_step)
+                end_step = component.get("end_step", end_step)
+                addition_type = str(component.get("addition_type", component.get("type", addition_type)))
+                if "total" in component:
+                    total = component.get("total", total)
+                    start = component.get("start", start)
+                    end = component.get("end", end)
+                else:
+                    start_amount = float(component.get("amount", component.get("start", total)))
+                    end_amount = component.get("end")
+                    steps = int(self.titration_fields.get("reaction_steps", QLineEdit("1")).text() or 1)
+                    values = self._component_step_values(
+                        {
+                            "name": name,
+                            "start": start_amount,
+                            "end": start_amount if end_amount is None else float(end_amount),
+                            "mode": mode,
+                            "shape_k": shape_k,
+                            "start_step": start_step,
+                            "end_step": end_step or None,
+                        },
+                        steps,
+                    )
+                    total = sum(values)
+                    start = start_amount
+                    end = start_amount if end_amount is None else float(end_amount)
+            elif isinstance(component, (list, tuple)) and len(component) >= 2:
+                name = str(component[0])
+                steps = int(self.titration_fields.get("reaction_steps", QLineEdit("1")).text() or 1)
+                if len(component) == 2:
+                    total = float(component[1]) * max(1, steps)
+                    start = 1.0
+                    end = 1.0
+                else:
+                    start_amount = float(component[1])
+                    end_amount = float(component[2])
+                    values = self._component_step_values(
+                        {
+                            "name": name,
+                            "start": start_amount,
+                            "end": end_amount,
+                            "mode": mode,
+                            "shape_k": shape_k,
+                            "start_step": start_step,
+                            "end_step": end_step or None,
+                        },
+                        steps,
+                    )
+                    total = sum(values)
+                    start = start_amount
+                    end = end_amount
+            self.add_titration_component_row(name, total, start, end, mode, shape_k, start_step, end_step, addition_type)
+
+    def _titration_component_rows_to_config(self) -> list[dict[str, object]]:
+        components: list[dict[str, object]] = []
+        for row in self.titration_component_rows:
+            component = self._titration_row_to_component(row)
+            if component["name"]:
+                components.append(component)
+        return components or [
+            {
+                "name": "Hematite",
+                "total": 5e-5,
+                "start": 1.0,
+                "end": 1.0,
+                "mode": "linear",
+                "shape_k": 3.0,
+                "start_step": 1,
+                "end_step": None,
+                "addition_type": "phase",
+            }
+        ]
+
+    def preview_titration_schedule(self) -> None:
+        if not hasattr(self, "titration_schedule_preview"):
+            return
+        try:
+            components = self._titration_component_rows_to_config()
+            steps = int(self.titration_fields["reaction_steps"].text() or 1)
+            rows = self._titration_schedule_rows(components, steps)
+            if not rows:
+                self.titration_schedule_preview.setPlainText("")
+                return
+            headers = ["step", *[row[0] for row in rows[0][1]]]
+            lines = ["\t".join(headers)]
+            for step_index, step_components in rows:
+                values = [str(step_index), *[f"{amount:.8g}" for _, amount in step_components]]
+                lines.append("\t".join(values))
+            self.titration_schedule_preview.setPlainText("\n".join(lines))
+        except Exception as exc:
+            self.titration_schedule_preview.setPlainText(f"Invalid schedule: {exc}")
+
+    @staticmethod
+    def _titration_schedule_rows(
+        components: list[object],
+        steps: int,
+    ) -> list[tuple[int, list[tuple[str, float]]]]:
+        rows: list[tuple[int, list[tuple[str, float]]]] = []
+        total_steps = max(1, steps)
+        component_values = [
+            (
+                ScenarioEditor._component_name(component),
+                ScenarioEditor._component_step_values(component, total_steps),
+            )
+            for component in components
+        ]
+        for step_index in range(1, total_steps + 1):
+            step_components: list[tuple[str, float]] = []
+            for name, values in component_values:
+                step_components.append((name, values[step_index - 1]))
+            rows.append((step_index, step_components))
+        return rows
+
+    @staticmethod
+    def _component_name(component: object) -> str:
+        if isinstance(component, dict):
+            return str(component.get("name", "component"))
+        if isinstance(component, (list, tuple)) and component:
+            return str(component[0])
+        return "component"
+
+    @staticmethod
+    def _component_step_values(component: object, steps: int) -> list[float]:
+        total_steps = max(1, int(steps))
+        active_start, active_end = ScenarioEditor._component_active_bounds(component, total_steps)
+        active_count = active_end - active_start + 1
+        if isinstance(component, dict) and "total" in component:
+            total = float(component.get("total", 0.0))
+            start = float(component.get("start", 1.0))
+            end = float(component.get("end", start))
+            mode = str(component.get("mode", "linear"))
+            shape_k = float(component.get("shape_k", 3.0))
+            weights = [
+                start
+                + (end - start)
+                * transform_progress(
+                    progress=0.0 if active_count <= 1 else active_index / (active_count - 1),
+                    mode=mode,
+                    shape_k=shape_k,
+                )
+                for active_index in range(active_count)
+            ]
+            weight_sum = sum(weights)
+            values = [0.0 for _ in range(total_steps)]
+            if weight_sum == 0:
+                return values
+            for offset, weight in enumerate(weights):
+                values[active_start - 1 + offset] = total * weight / weight_sum
+            return values
+        if isinstance(component, dict):
+            start = float(component.get("amount", component.get("start", 0.0)))
+            end = float(component.get("end", start))
+            mode = str(component.get("mode", "linear"))
+            shape_k = float(component.get("shape_k", 3.0))
+        elif isinstance(component, (list, tuple)) and len(component) == 2:
+            return [float(component[1]) for _ in range(total_steps)]
+        elif isinstance(component, (list, tuple)) and len(component) >= 3:
+            start = float(component[1])
+            end = float(component[2])
+            mode = "linear"
+            shape_k = 3.0
+        else:
+            return [0.0 for _ in range(total_steps)]
+        active_values = [
+            start
+            + (end - start)
+            * transform_progress(
+                progress=0.0 if active_count <= 1 else active_index / (active_count - 1),
+                mode=mode,
+                shape_k=shape_k,
+            )
+            for active_index in range(active_count)
+        ]
+        values = [0.0 for _ in range(total_steps)]
+        for offset, value in enumerate(active_values):
+            values[active_start - 1 + offset] = value
+        return values
+
+    @staticmethod
+    def _component_active_bounds(component: object, total_steps: int) -> tuple[int, int]:
+        if isinstance(component, dict):
+            raw_start = component.get("start_step", 1)
+            raw_end = component.get("end_step", total_steps)
+        else:
+            raw_start = 1
+            raw_end = total_steps
+        start = max(1, min(total_steps, int(raw_start or 1)))
+        end = max(1, min(total_steps, int(raw_end or total_steps)))
+        if end < start:
+            start, end = end, start
+        return start, end
 
     def _fields_to_plot_config(self, existing_plot_config: dict[str, object] | None = None) -> dict[str, object]:
         plot_config = dict(existing_plot_config or {})
@@ -1234,6 +1728,7 @@ class ScenarioEditor(QMainWindow):
                 "grid_alpha": self.plot_grid_alpha.text(),
                 "figure_width": self.plot_figure_width.text(),
                 "figure_height": self.plot_figure_height.text(),
+                "lock_figure_size": self.plot_lock_figure_size.currentText(),
                 "layers": [self._plot_layer_to_config(layer) for layer in self.plot_layers],
             }
         )
@@ -1271,6 +1766,10 @@ class ScenarioEditor(QMainWindow):
         self.plot_grid_alpha.setText(str(plot_config.get("grid_alpha", self.plot_grid_alpha.text())))
         self.plot_figure_width.setText(str(plot_config.get("figure_width", self.plot_figure_width.text())))
         self.plot_figure_height.setText(str(plot_config.get("figure_height", self.plot_figure_height.text())))
+        lock_figure_size = plot_config.get("lock_figure_size", self.plot_lock_figure_size.currentText())
+        if isinstance(lock_figure_size, bool):
+            lock_figure_size = "on" if lock_figure_size else "off"
+        self._set_combo_text_or_add(self.plot_lock_figure_size, str(lock_figure_size))
         layer_configs = plot_config.get("layers", [])
         if isinstance(layer_configs, list):
             self.clear_plot_layers()
@@ -1366,7 +1865,8 @@ class ScenarioEditor(QMainWindow):
 
     def load_current_output_plot(self) -> None:
         try:
-            csv_path = self._fields_to_config().output_path / "selected_output.csv"
+            output_dir = Path(self.output_dir.text().strip() or str(self.working_dir or Path.cwd()))
+            csv_path = output_dir / "selected_output.csv"
             self._load_plot_csv(csv_path)
             self.status.setText(f"Loaded current output: {csv_path}")
         except Exception as exc:
@@ -1458,10 +1958,12 @@ class ScenarioEditor(QMainWindow):
             figure.clear()
             style = self._plot_style()
             self._apply_figure_size(figure, style)
+            self.plot_window.set_lock_figure_size(bool(style["lock_figure_size"]))
             ax_left = figure.add_subplot(111)
             legend_items = self._plot_frame_on_axes(ax_left, plot_frame, x_column, layers, stage_value, style, show_title=True)
             self._place_figure_legend(figure, legend_items, style)
             self._adjust_figure_margins(figure, style)
+            self.plot_window.set_lock_figure_size(bool(style["lock_figure_size"]))
             self.plot_window.canvas.draw()
             self.plot_window.show()
             self.plot_window.raise_()
@@ -1495,6 +1997,7 @@ class ScenarioEditor(QMainWindow):
             width = float(style["figure_width"])
             height = max(float(style["figure_height"]), 2.6 * len(stage_values))
             figure.set_size_inches(width, height, forward=True)
+            self.plot_window.set_lock_figure_size(bool(style["lock_figure_size"]))
             axes = figure.subplots(len(stage_values), 1, squeeze=False)
             shared_legend_items: tuple[list[object], list[str]] = ([], [])
             stage_frames = [
@@ -1525,6 +2028,7 @@ class ScenarioEditor(QMainWindow):
                     ax_left.set_xlabel("")
             self._place_figure_legend(figure, shared_legend_items, style)
             self._adjust_figure_margins(figure, style, multi_stage=True)
+            self.plot_window.set_lock_figure_size(bool(style["lock_figure_size"]))
             self.plot_window.canvas.draw()
             self.plot_window.show()
             self.plot_window.raise_()
@@ -1580,8 +2084,11 @@ class ScenarioEditor(QMainWindow):
                 continue
             axis = ax_left.twinx()
             if axis_number > 2:
-                axis.spines["right"].set_position(("axes", 1.0 + 0.09 * (axis_number - 2)))
+                axis.spines["right"].set_position(("axes", 1.0 + self.RIGHT_AXIS_SPACING * (axis_number - 2)))
             axis.spines["right"].set_visible(True)
+            axis.yaxis.set_ticks_position("right")
+            axis.yaxis.set_label_position("right")
+            axis.tick_params(axis="y", pad=4 + 4 * max(0, axis_number - 2))
             axis_map[axis_number] = axis
 
         for layer in line_layers:
@@ -1604,10 +2111,15 @@ class ScenarioEditor(QMainWindow):
                 color = axis_layers[0]["line_color"]
                 axis_label = axis_layers[0]["label"] or axis_layers[0]["y"]
                 axis.set_ylabel(axis_label, fontsize=float(style["label_size"]), fontfamily=str(style["font_family"]), color=color)
-                axis.tick_params(axis="y", colors=color)
+                axis.tick_params(axis="y", colors=color, pad=4 + 4 * max(0, axis_number - 2))
                 axis.spines["right"].set_color(color)
             else:
-                axis.set_ylabel(f"Y axis {axis_number}", fontsize=float(style["label_size"]), fontfamily=str(style["font_family"]))
+                axis.set_ylabel(
+                    f"Y axis {axis_number}",
+                    fontsize=float(style["label_size"]),
+                    fontfamily=str(style["font_family"]),
+                    labelpad=8 + 4 * max(0, axis_number - 2),
+                )
 
         title = self.plot_title.text()
         if title_suffix:
@@ -1629,8 +2141,15 @@ class ScenarioEditor(QMainWindow):
         if aspect_ratio == "equal":
             ax_left.set_aspect("equal", adjustable="box")
         self._apply_grid_style(ax_left, style)
+        has_secondary_y_axis = any(axis is not ax_left for axis in axis_map.values())
         for axis in axis_map.values():
-            self._apply_axis_style(axis, style)
+            is_primary_axis = axis is ax_left
+            self._apply_axis_style(
+                axis,
+                style,
+                show_left_ticks=is_primary_axis,
+                show_right_ticks=(not is_primary_axis) or not has_secondary_y_axis,
+            )
             self._apply_y_axis_format(axis, style)
         self._set_tight_x_limits(ax_left, plot_frame[x_column])
         for axis in axis_map.values():
@@ -1664,6 +2183,7 @@ class ScenarioEditor(QMainWindow):
             "grid_alpha": float(self.plot_grid_alpha.text() or 0.25),
             "figure_width": float(self.plot_figure_width.text() or 8),
             "figure_height": float(self.plot_figure_height.text() or 5),
+            "lock_figure_size": self.plot_lock_figure_size.currentText() == "on",
         }
 
     def _apply_figure_size(self, figure: Figure, style: dict[str, object]) -> None:
@@ -1675,15 +2195,25 @@ class ScenarioEditor(QMainWindow):
         figure.set_size_inches(width, height, forward=True)
 
     @staticmethod
-    def _apply_axis_style(axis, style: dict[str, object]) -> None:
+    def _apply_axis_style(
+        axis,
+        style: dict[str, object],
+        show_left_ticks: bool = True,
+        show_right_ticks: bool = True,
+    ) -> None:
         for spine in axis.spines.values():
             spine.set_linewidth(float(style["axis_line_width"]))
+        axis.spines["left"].set_visible(show_left_ticks)
+        axis.spines["right"].set_visible(show_right_ticks)
         axis.tick_params(
             direction="in",
             width=float(style["tick_width"]),
             labelsize=float(style["tick_size"]),
             top=True,
-            right=True,
+            left=show_left_ticks,
+            right=show_right_ticks,
+            labelleft=show_left_ticks,
+            labelright=show_right_ticks and not show_left_ticks,
         )
         for label in [*axis.get_xticklabels(), *axis.get_yticklabels()]:
             label.set_fontfamily(str(style["font_family"]))
@@ -1701,8 +2231,14 @@ class ScenarioEditor(QMainWindow):
 
     @staticmethod
     def _apply_grid_style(axis, style: dict[str, object]) -> None:
+        if not bool(style["grid_enabled"]):
+            axis.grid(False, which="both", axis="both")
+            for gridline in [*axis.get_xgridlines(), *axis.get_ygridlines()]:
+                gridline.set_visible(False)
+            return
         axis.grid(
-            bool(style["grid_enabled"]),
+            True,
+            which="major",
             axis=str(style["grid_axis"]),
             linestyle=str(style["grid_style"]),
             color=str(style["grid_color"]),
@@ -1726,10 +2262,10 @@ class ScenarioEditor(QMainWindow):
     @staticmethod
     def _legend_anchor(location: str) -> tuple[str, tuple[float, float]]:
         mapping = {
-            "outside upper right": ("upper left", (0.77, 0.93)),
-            "outside upper left": ("upper right", (0.23, 0.93)),
-            "outside lower right": ("lower left", (0.77, 0.16)),
-            "outside lower left": ("lower right", (0.23, 0.16)),
+            "outside upper right": ("upper right", (0.98, 0.93)),
+            "outside upper left": ("upper left", (0.02, 0.93)),
+            "outside lower right": ("lower right", (0.98, 0.16)),
+            "outside lower left": ("lower left", (0.02, 0.16)),
         }
         return mapping.get(location, mapping["outside upper right"])
 
@@ -1770,28 +2306,52 @@ class ScenarioEditor(QMainWindow):
             text.set_fontfamily(str(style["font_family"]))
 
     @staticmethod
+    def _legend_bbox_in_figure(figure: Figure):
+        if not figure.legends:
+            return None
+        try:
+            figure.canvas.draw()
+            renderer = figure.canvas.get_renderer()
+            return figure.legends[-1].get_window_extent(renderer=renderer).transformed(figure.transFigure.inverted())
+        except Exception:
+            return None
+
+    @staticmethod
     def _adjust_figure_margins(figure: Figure, style: dict[str, object], multi_stage: bool = False) -> None:
         location = str(style["legend_location"])
-        left = 0.1
-        right = 0.9
+        left = 0.12
+        right = 0.88
         bottom = 0.12 if not multi_stage else 0.07
         top = 0.9 if not multi_stage else 0.94
         if "right" in location:
-            right = 0.68
+            right = 0.7
         if "left" in location:
-            left = 0.32
+            left = 0.3
         if "lower" in location:
             bottom = max(bottom, 0.24)
         if "upper" in location:
             top = min(top, 0.82 if not multi_stage else 0.86)
+        legend_bbox = ScenarioEditor._legend_bbox_in_figure(figure)
+        if legend_bbox is not None:
+            gap = 0.035
+            min_plot_width = 0.25
+            if "right" in location:
+                right = min(right, max(left + min_plot_width, float(legend_bbox.x0) - gap))
+            if "left" in location:
+                left = max(left, min(right - min_plot_width, float(legend_bbox.x1) + gap))
         max_right_spine = 1.0
         for axis in figure.axes:
             position = axis.spines["right"].get_position()
             if isinstance(position, tuple) and position[0] == "axes":
                 max_right_spine = max(max_right_spine, float(position[1]))
         if max_right_spine > 1.0:
-            extra_axes_width = max_right_spine - 1.0
-            right = min(right, max(0.5, 0.9 - extra_axes_width))
+            base_width = float(style["figure_width"])
+            current_height = figure.get_figheight()
+            extra_axis_count = max(1, int(round((max_right_spine - 1.0) / ScenarioEditor.RIGHT_AXIS_SPACING)))
+            expanded_width = base_width + ScenarioEditor.EXTRA_RIGHT_AXIS_WIDTH_INCHES * extra_axis_count
+            main_plot_width = base_width * max(0.1, right - left)
+            right = min(0.98, left + main_plot_width / expanded_width)
+            figure.set_size_inches(expanded_width, current_height, forward=True)
         figure.subplots_adjust(left=left, right=right, top=top, bottom=bottom, hspace=0.34 if multi_stage else 0.2)
 
     def _active_plot_layers(self) -> list[dict[str, object]]:
@@ -1879,7 +2439,8 @@ class ScenarioEditor(QMainWindow):
 
     def load_config(self) -> None:
         try:
-            filename, _ = QFileDialog.getOpenFileName(self, "Load scenario config", "", "JSON (*.json)")
+            start_dir = str(self.working_dir or Path.cwd())
+            filename, _ = QFileDialog.getOpenFileName(self, "Load scenario config", start_dir, "JSON (*.json)")
             if not filename:
                 return
             loaded_config = ModelConfig.from_dict(json.loads(Path(filename).read_text(encoding="utf-8")))
@@ -1895,7 +2456,8 @@ class ScenarioEditor(QMainWindow):
 
     def save_config(self) -> None:
         try:
-            filename, _ = QFileDialog.getSaveFileName(self, "Save scenario config", "scenario.json", "JSON (*.json)")
+            default_path = self._default_output_file("scenario.json")
+            filename, _ = QFileDialog.getSaveFileName(self, "Save scenario config", str(default_path), "JSON (*.json)")
             if not filename:
                 return
             config = self._fields_to_config()
@@ -1906,7 +2468,8 @@ class ScenarioEditor(QMainWindow):
 
     def render_script(self) -> None:
         try:
-            filename, _ = QFileDialog.getSaveFileName(self, "Save PHREEQC script", "scenario.phr", "PHREEQC (*.phr)")
+            default_path = self._default_output_file("scenario.phr")
+            filename, _ = QFileDialog.getSaveFileName(self, "Save PHREEQC script", str(default_path), "PHREEQC (*.phr)")
             if not filename:
                 return
             script = build_phreeqc_script(self._fields_to_config())
@@ -1969,6 +2532,11 @@ class ScenarioEditor(QMainWindow):
         result.selected_output.to_csv(csv_path, index=False)
         return script_path, csv_path
 
+    def _default_output_file(self, filename: str) -> Path:
+        output_dir = Path(self.output_dir.text().strip() or str(self.working_dir or Path.cwd()))
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir / filename
+
     def _show_error(self, title: str, exc: Exception) -> None:
         details = traceback.format_exc()
         QMessageBox.critical(self, title, f"{exc}\n\nDetails:\n{details}")
@@ -1983,6 +2551,8 @@ class MainControlWindow(QMainWindow):
         self.transport_window: ScenarioEditor | None = None
         self.titration_window: ScenarioEditor | None = None
         self.editor_subwindows: dict[str, object] = {}
+        self.working_dirs: dict[str, Path | None] = {"transport": None, "titration": None}
+        self.working_dir_fields: dict[str, QLineEdit] = {}
         self.setWindowTitle("PhreeqPyne Workspace")
         self.setMinimumSize(900, 620)
         self._build_form()
@@ -2010,10 +2580,20 @@ class MainControlWindow(QMainWindow):
         toolbar_row.addStretch(1)
         layout.addLayout(toolbar_row)
 
+        for kind in ["transport", "titration"]:
+            workdir_row = QHBoxLayout()
+            field = QLineEdit()
+            field.setReadOnly(True)
+            choose_workdir = QPushButton(f"Choose {kind} folder")
+            choose_workdir.clicked.connect(lambda _=False, selected_kind=kind: self.choose_working_dir(selected_kind))
+            workdir_row.addWidget(QLabel(f"{kind.title()} folder"))
+            workdir_row.addWidget(field, 1)
+            workdir_row.addWidget(choose_workdir)
+            self.working_dir_fields[kind] = field
+            layout.addLayout(workdir_row)
+
         self.mdi_area = QMdiArea(root)
-        self.mdi_area.setTabsClosable(True)
-        self.mdi_area.setTabsMovable(True)
-        self.mdi_area.setViewMode(QMdiArea.ViewMode.TabbedView)
+        self.mdi_area.setViewMode(QMdiArea.ViewMode.SubWindowView)
         layout.addWidget(self.mdi_area, 1)
 
         self.status = QLabel("Ready")
@@ -2023,17 +2603,60 @@ class MainControlWindow(QMainWindow):
     def open_selected_tool(self, index: int) -> None:
         tool_name = self.tools_combo.itemText(index).lower()
         if tool_name in {"transport", "titration"}:
-            self.open_editor(tool_name)
+            try:
+                self.open_editor(tool_name)
+            except Exception as exc:
+                QMessageBox.warning(self, "Working folder required", str(exc))
+                self.status.setText("Choose a working folder before opening tools.")
         self.tools_combo.setCurrentIndex(0)
 
+    def choose_working_dir(self, simulation_kind: str) -> Path | None:
+        current_dir = self.working_dirs.get(simulation_kind)
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            f"Choose {simulation_kind} working folder",
+            str(current_dir or Path.cwd()),
+        )
+        if not selected:
+            return current_dir
+        working_dir = Path(selected).resolve()
+        self.working_dirs[simulation_kind] = working_dir
+        self.working_dir_fields[simulation_kind].setText(str(working_dir))
+        self.status.setText(f"{simulation_kind.title()} folder: {working_dir}")
+        self._apply_working_dir_to_editor(simulation_kind)
+        return working_dir
+
+    def ensure_working_dir(self, simulation_kind: str) -> Path:
+        if self.working_dirs.get(simulation_kind) is None:
+            self.choose_working_dir(simulation_kind)
+        working_dir = self.working_dirs.get(simulation_kind)
+        if working_dir is None:
+            raise ValueError(f"Choose a {simulation_kind} working folder before opening this tool or running simulations.")
+        working_dir.mkdir(parents=True, exist_ok=True)
+        return working_dir
+
+    def _apply_working_dir_to_editor(self, simulation_kind: str) -> None:
+        working_dir = self.working_dirs.get(simulation_kind)
+        editor = self._editor_for_kind(simulation_kind)
+        if working_dir is not None and editor is not None:
+            editor.working_dir = working_dir
+            editor.output_dir.setText(str(working_dir))
+
+    @staticmethod
+    def _blank_window_icon() -> QIcon:
+        pixmap = QPixmap(1, 1)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        return QIcon(pixmap)
+
     def open_editor(self, simulation_kind: str) -> ScenarioEditor:
+        working_dir = self.ensure_working_dir(simulation_kind)
         current = self._editor_for_kind(simulation_kind)
         if current is None:
-            current = ScenarioEditor(simulation_kind)
-            current.setWindowFlags(Qt.WindowType.Widget)
-            subwindow = self.mdi_area.addSubWindow(current, Qt.WindowType.FramelessWindowHint)
+            current = ScenarioEditor(simulation_kind, working_dir=working_dir)
+            current.setWindowIcon(self._blank_window_icon())
+            subwindow = self.mdi_area.addSubWindow(current)
             subwindow.setWindowTitle(current.windowTitle())
-            subwindow.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+            subwindow.setWindowIcon(self._blank_window_icon())
             subwindow.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
             subwindow.destroyed.connect(lambda _=None, kind=simulation_kind: self._clear_editor_reference(kind))
             self.editor_subwindows[simulation_kind] = subwindow
@@ -2056,20 +2679,22 @@ class MainControlWindow(QMainWindow):
 
     def run_open_editors(self) -> None:
         try:
+            transport_dir = self.ensure_working_dir("transport")
+            titration_dir = self.ensure_working_dir("titration")
             transport = self.open_editor("transport")
             titration = self.open_editor("titration")
             configs = [
                 ("transport", deepcopy(transport._fields_to_config())),
                 ("titration", deepcopy(titration._fields_to_config())),
             ]
-            base_output_dir = configs[0][1].output_path
             self.status.setText("Running open transport and titration windows...")
             QApplication.processEvents()
             outputs: dict[str, tuple[Path, Path]] = {}
             with ThreadPoolExecutor(max_workers=2) as executor:
                 futures = {}
                 for kind, config in configs:
-                    config.runtime.output_dir = str(base_output_dir / kind)
+                    output_dir = transport_dir if kind == "transport" else titration_dir
+                    config.runtime.output_dir = str(output_dir)
                     futures[executor.submit(ScenarioEditor._run_config_to_output, config, Path(config.runtime.output_dir))] = kind
                 for future in as_completed(futures):
                     outputs[futures[future]] = future.result()

@@ -24,7 +24,9 @@ def test_build_phreeqc_script_dispatches_by_simulation_kind():
 
     config.simulation_kind = "titration"
 
-    assert "REACTION 1" in build_phreeqc_script(config)
+    titration_script = build_phreeqc_script(config)
+    assert "Phase+solution step" in titration_script
+    assert not any(line.startswith("REACTION ") for line in titration_script.splitlines())
 
 
 def test_unknown_simulation_kind_fails_with_available_kinds():

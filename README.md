@@ -53,7 +53,9 @@ The GUI opens a main workspace that behaves like a tabbed internal-window
 browser. Use the `Tools` dropdown to open or activate `transport` and
 `titration` editors; close unneeded tools from their internal tab close button.
 Editors can also be tiled or cascaded inside the workspace. Each editor owns
-only the tabs for its simulation family. Titration uses one homogeneous reaction
+only the tabs for its simulation family. Choose a separate working folder for
+each tool before opening it; generated configs, rendered PHREEQC scripts, and
+simulation outputs default to that tool's folder. Titration uses one homogeneous reaction
 solution and reaction-step output, so it does not expose transport stages,
 all-stage plotting, shell-to-core gradients, or kinetic-rate controls. The Plot tab can load
 `selected_output.csv`; plots open in a separate window and can be redrawn after
@@ -61,6 +63,17 @@ changing columns, grouping, line style, line width, color, titles, axis labels,
 and aspect ratio. The main workspace also includes a one-click run for the
 currently open transport and titration editor configurations, writing them to
 separate output folders.
+Titration reactants may be constant (`Hematite, 5e-7`) or step-scheduled
+(`Hematite, 5e-7 -> 1e-7; Chalcopyrite(alpha), 0 -> 4e-7`), which generates
+sequential reaction blocks that reuse the previous step's solution and
+equilibrium phases.
+Use the `Equilibrium phases` tab to set mineral precipitation capacity and
+redox/fugacity buffers such as `O2(g)`.
+For stepwise mineral inventory, set titration `mode` to `inventory_step`; the
+configured component schedule is written as sequential `EQUILIBRIUM_PHASES`
+additions that reuse the previous step's saved solution and phase assemblage.
+The Titration tab can preview the per-step additions, and inventory outputs
+include `add_*` columns so each step's planned mineral input is visible.
 
 Run the simulation when the configured IPhreeqc DLL/SO and database are available:
 

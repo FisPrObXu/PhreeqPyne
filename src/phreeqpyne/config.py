@@ -108,9 +108,21 @@ class ModelConfig:
         "punch_frequency": 1,
     })
     titration_params: dict[str, Any] = field(default_factory=lambda: {
+        "mode": "manual_step",
         "solution_source": "reaction_solution",
-        "reaction_components": [("Hematite", 5e-7)],
-        "reaction_total_moles": 1.0,
+        "reaction_components": [
+            {
+                "name": "Hematite",
+                "total": 5e-4,
+                "start": 1.0,
+                "end": 1.0,
+                "mode": "linear",
+                "shape_k": 3.0,
+                "start_step": 1,
+                "end_step": None,
+                "addition_type": "phase",
+            }
+        ],
         "reaction_steps": 1000,
         "incremental_reactions": True,
     })
